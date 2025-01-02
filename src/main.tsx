@@ -1,8 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { AuthProvider } from './providers/AuthProvider';
 import { AuthErrorBoundary } from './components/Auth/AuthErrorBoundary';
+import { AuthProvider } from './providers/AuthProvider';
 import App from './App';
 import './index.css';
 
@@ -11,11 +11,11 @@ const root = createRoot(document.getElementById('root')!);
 root.render(
   <React.StrictMode>
     <BrowserRouter>
-      <AuthErrorBoundary>
-        <AuthProvider>
+      <AuthProvider>
+        <AuthErrorBoundary>
           <App />
-        </AuthProvider>
-      </AuthErrorBoundary>
+        </AuthErrorBoundary>
+      </AuthProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

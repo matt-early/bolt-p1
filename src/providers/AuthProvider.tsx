@@ -9,7 +9,7 @@ import { getAuth } from '../services/firebase/db';
 import { initializeFirebaseServices } from '../services/firebase/init';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { logOperation } from '../services/firebase/logging';
-import { initNetworkMonitoring, getNetworkStatus } from '../services/firebase/network';
+import { initNetworkMonitoring, getNetworkStatus, waitForNetwork } from '../services/firebase/network';
 import { UserProfile } from '../types/auth';
 import { signIn as firebaseSignIn } from '../services/auth';
 import { loadUserProfile } from '../services/auth/init';
@@ -47,6 +47,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [firebaseInitialized, setFirebaseInitialized] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [initAttempts, setInitAttempts] = useState(0);
+  const [networkError, setNetworkError] = useState<string | null>(null);
   const MAX_INIT_ATTEMPTS = 3;
   
   // Initialize Firebase
@@ -54,17 +55,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const init = async () => {
       try {
         setIsInitializing(true);
+        setError(null);
+        setNetworkError(null);
+
         if (firebaseInitialized) return;
         if (initAttempts >= MAX_INIT_ATTEMPTS) {
           const { isOnline } = getNetworkStatus();
-          setError(
+          const errorMessage = 
             isOnline
               ? 'Failed to initialize Firebase after multiple attempts' 
-              : 'No internet connection. Please check your network and try again.'
-          );
+              : 'No internet connection. Please check your network and try again.';
+          
+          setError(errorMessage);
+          if (!isOnline) {
+            setNetworkError(errorMessage);
+          }
           return;
         }
         
+        // Wait for network if offline
+        if (!navigator.onLine) {
+          const hasNetwork = await waitForNetwork(30000); // 30 second timeout
+          if (!hasNetwork) {
+            throw new Error('No network connection available');
+          }
+        }
+
         await initializeFirebaseServices();
         setFirebaseInitialized(true);
         logOperation('AuthProvider', 'firebase-initialized');
@@ -73,7 +89,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const message = !isOnline
           ? 'No internet connection. Please check your network and try again.'
           : err instanceof Error ? err.message : 'Failed to initialize Firebase';
-        setError(message);
+        
+        if (!isOnline) {
+          setNetworkError(message);
+        } else {
+          setError(message);
+        }
+        
         console.error('Firebase initialization error:', err);
         setInitAttempts(prev => prev + 1);
         setTimeout(init, 2000 * (initAttempts + 1)); // Exponential backoff
@@ -244,13 +266,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   if (!firebaseInitialized || loading) {
     return <LoadingScreen 
       error={error}
+      networkError={networkError}
       retryCount={initAttempts}
       maxRetries={MAX_INIT_ATTEMPTS}
       isOffline={!getNetworkStatus().isOnline}
     />;
   }
 
-  // Wrap the provider in the error boundary
   return (
     <AuthContext.Provider value={value}>
       {children}

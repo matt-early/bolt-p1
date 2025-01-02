@@ -20,6 +20,7 @@ import { AuthRequestList } from './components/Admin/Auth/AuthRequestList';
 import { UserManagement } from './components/Admin/Auth/UserManagement';
 
 const App: React.FC = () => {
+  // Remove unused useAuth hook
   return (
     <Routes>
       {/* Public Routes */}
@@ -29,7 +30,12 @@ const App: React.FC = () => {
       <Route path="unauthorized" element={<UnauthorizedPage />} />
 
       {/* Protected Routes */}
-      <Route path="/" element={<PrivateRoute><AdminLayout /></PrivateRoute>}>
+      <Route 
+        path="/" 
+        element={
+          <PrivateRoute><AdminLayout /></PrivateRoute>
+        }
+      >
         <Route index element={<Navigate to="/admin" replace />} />
         <Route path="admin" element={<AdminDashboard />} />
         <Route path="admin/users" element={<UserManagement />} />

@@ -2,25 +2,15 @@ import React, { useEffect } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../providers/AuthProvider';
 import { AUTH_SETTINGS } from '../../config/auth-settings';
-import { LoadingScreen } from '../common/LoadingScreen';
+import { LoadingScreen } from '../common/LoadingScreen'; 
 
 interface PrivateRouteProps {
   children: React.ReactNode;
 }
 
-export const PrivateRoute: React.FC<PrivateRouteProps> = ({ 
-  children
-}) => {
+export const PrivateRoute: React.FC<PrivateRouteProps> = ({ children }) => {
   const { currentUser, userProfile, loading } = useAuth();
   const location = useLocation();
-
-  // Clear any stale auth state
-  useEffect(() => {
-    if (!currentUser && !loading) {
-      sessionStorage.clear();
-      localStorage.clear();
-    }
-  }, [currentUser, loading]);
 
   if (loading) {
     return <LoadingScreen />;
@@ -28,8 +18,6 @@ export const PrivateRoute: React.FC<PrivateRouteProps> = ({
 
   // Check if user is authenticated
   if (!currentUser || !userProfile) {
-    sessionStorage.clear();
-    localStorage.clear();
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 

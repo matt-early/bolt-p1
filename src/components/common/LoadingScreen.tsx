@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react';
 
 interface LoadingScreenProps {
   error?: string | null;
+  networkError?: string | null;
   retryCount?: number;
   maxRetries?: number;
   isOffline?: boolean;
@@ -10,21 +11,22 @@ interface LoadingScreenProps {
 
 export const LoadingScreen: React.FC<LoadingScreenProps> = ({ 
   error,
+  networkError,
   retryCount = 0,
   maxRetries = 3,
   isOffline = !navigator.onLine
 }) => {
   return (
     <div className="flex flex-col items-center justify-center p-8">
-      {error ? (
+      {(error || networkError) ? (
         <div className="bg-red-50 border border-red-200 rounded-lg text-red-600 text-center p-6 max-w-md">
           <p className="text-lg font-medium mb-2">Error</p>
-          {isOffline ? (
+          {networkError ? (
             <p className="text-sm mb-4">
               No internet connection. Please check your network and try again.
             </p>
           ) : (
-            <p className="text-sm whitespace-pre-wrap">{error}</p>
+            <p className="text-sm whitespace-pre-wrap">{error || networkError}</p>
           )}
           {retryCount > 0 && retryCount < maxRetries && (
             <p className="text-sm text-gray-600 mt-2">
@@ -38,7 +40,7 @@ export const LoadingScreen: React.FC<LoadingScreenProps> = ({
           )}
           {!isOffline && (
             <p className="text-xs text-red-500 mt-4">
-              Please check your environment configuration and try again.
+              {error ? 'Please check your environment configuration and try again.' : ''}
             </p>
           )}
         </div>

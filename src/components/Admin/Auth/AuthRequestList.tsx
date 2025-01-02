@@ -13,6 +13,7 @@ import { RequestList } from './components/RequestList';
 import { ErrorDisplay } from './components/ErrorDisplay';
 import { EmptyState } from './components/EmptyState';
 import { LoadingState } from './components/LoadingState';
+import { ExistingUserDialog } from './components/ExistingUserDialog';
 import { SuccessNotification } from '../../common/SuccessNotification';
 
 export const AuthRequestList: React.FC = () => {
@@ -21,6 +22,11 @@ export const AuthRequestList: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [existingUserDetails, setExistingUserDetails] = useState<{
+    email: string;
+    details: { auth: boolean; users: boolean; sales: boolean };
+    request: AuthRequest;
+  } | null>(null);
   const { currentUser } = useAuth();
 
   useEffect(() => {
@@ -48,10 +54,6 @@ export const AuthRequestList: React.FC = () => {
   const handleApprove = async (request: AuthRequest) => {
     try {
       if (!currentUser) return;
-      if (!currentUser.email) {
-        setError('User email not found');
-        return;
-      }
 
       setSuccessMessage(null);
       setError(null);
@@ -61,38 +63,97 @@ export const AuthRequestList: React.FC = () => {
         prev.map(r => r.id === request.id ? { ...r, loading: true } : r)
       );
 
-      // Attempt to approve the request
-      await approveAuthRequest(request.id, currentUser.uid, {
-        email: request.email.toLowerCase().trim(),
-        name: request.name,
-        role: request.role,
-        storeIds: request.storeIds,
-        primaryStoreId: request.primaryStoreId,
-        staffCode: request.staffCode
-      });
+      try {
+        const result = await approveAuthRequest(request.id, currentUser.uid, {
+          email: request.email.toLowerCase().trim(),
+          name: request.name,
+          role: request.role,
+          storeIds: request.storeIds,
+          primaryStoreId: request.primaryStoreId,
+          staffCode: request.staffCode
+        });
 
-      // On success, remove from pending list
-      setRequests(prev => prev.filter(r => r.id !== request.id));
+        if (result.existingUser) {
+          setExistingUserDetails({
+            email: request.email,
+            details: result.existingUser,
+            request
+          });
+          return;
+        }
 
-      // Show success message with more details
-      setSuccessMessage(
-        `Successfully approved ${request.name}'s request.\nA password reset email has been sent to ${request.email}.`
-      );
+        if (result.success) {
+          // On success, remove from pending list
+          setRequests(prev => prev.filter(r => r.id !== request.id));
 
+          // Show success message with more details
+          setSuccessMessage(
+            `Successfully approved ${request.name}'s request.\nA password reset email has been sent to ${request.email}.`
+          );
+        } else {
+          setError(result.error || 'Failed to approve request');
+        }
+      } catch (err) {
+        let message = 'Failed to approve request';
+        
+        if (err instanceof Error) {
+          if (err.message.includes('permission-denied')) {
+            message = 'You do not have permission to approve requests';
+          } else {
+            message = err.message;
+          }
+        }
+        
+        setError(message);
+      }
     } catch (err) {
       let message = 'Failed to approve request';
       
       if (err instanceof Error) {
-        if (err.message.includes('permission')) {
-          message = 'You do not have permission to approve requests';
-        } else {
-          message = err.message;
-        }
+        message = err.message;
       }
       
       setError(message);
+    } finally {
+      // Reset loading state
+      setRequests(prev => 
+        prev.map(r => r.id === request.id ? { ...r, loading: false } : r)
+      );
+    }
+  };
 
-      // Reset loading states
+  const handleContinueApproval = async () => {
+    if (!existingUserDetails || !currentUser) return;
+
+    const { request } = existingUserDetails;
+
+    try {
+      setError(null);
+      
+      const result = await approveAuthRequest(request.id, currentUser.uid, {
+        email: request.email,
+        name: request.name.trim(),
+        role: request.role, 
+        storeIds: request.storeIds || [],
+        primaryStoreId: request.primaryStoreId || '',
+        staffCode: request.staffCode || '',
+        forceContinue: true
+      });
+
+      if (result.success) {
+        // On success, remove from pending list
+        setRequests(prev => prev.filter(r => r.id !== request.id));
+
+        // Show success message with more details
+        setSuccessMessage(
+          `Successfully approved ${request.name}'s request.\nA password reset email has been sent to ${request.email}.`
+        );
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to approve request');
+    } finally {
+      setExistingUserDetails(null);
+      // Reset loading state
       setRequests(prev =>
         prev.map(r => r.id === request.id ? { ...r, loading: false } : r)
       );
@@ -150,6 +211,15 @@ export const AuthRequestList: React.FC = () => {
         onApprove={handleApprove}
         onReject={handleReject}
       />
+      
+      {existingUserDetails && (
+        <ExistingUserDialog
+          email={existingUserDetails.email}
+          details={existingUserDetails.details}
+          onClose={() => setExistingUserDetails(null)}
+          onContinue={handleContinueApproval}
+        />
+      )}
     </div>
   );
 };
