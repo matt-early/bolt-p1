@@ -3,12 +3,12 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAM36LZtP1TlTn63UX0nKkZ5lQN5prFiWM",
-  authDomain: "twodegrees-retail.firebaseapp.com",
-  projectId: "twodegrees-retail",
-  storageBucket: "twodegrees-retail.firebasestorage.app",
-  messagingSenderId: "910958083337",
-  appId: "1:910958083337:web:3c9b1dbf8a63cb1fada7d8"
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: ""
 };
 
 const app = initializeApp(firebaseConfig);
