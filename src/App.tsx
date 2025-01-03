@@ -1,5 +1,6 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { useAuth } from './providers/AuthProvider';
 import { AuthErrorBoundary } from './components/Auth/AuthErrorBoundary';
 import { PrivateRoute } from './components/Auth/PrivateRoute';
 import { SignInPage } from './components/Auth/SignInPage';
@@ -20,38 +21,47 @@ import { AuthRequestList } from './components/Admin/Auth/AuthRequestList';
 import { UserManagement } from './components/Admin/Auth/UserManagement';
 
 const App: React.FC = () => {
-  // Remove unused useAuth hook
+  const { loading } = useAuth();
+
+  if (loading) {
+    return <LoadingScreen />;
+  }
+
   return (
-    <Routes>
-      {/* Public Routes */}
-      <Route path="login" element={<SignInPage />} />
-      <Route path="forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="register" element={<RegisterPage />} />
-      <Route path="unauthorized" element={<UnauthorizedPage />} />
+    <AuthErrorBoundary>
+      <Routes>
+        {/* Public Routes */}
+        <Route path="login" element={<SignInPage />} />
+        <Route path="forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="register" element={<RegisterPage />} />
+        <Route path="unauthorized" element={<UnauthorizedPage />} />
 
-      {/* Protected Routes */}
-      <Route 
-        path="/" 
-        element={
-          <PrivateRoute><AdminLayout /></PrivateRoute>
-        }
-      >
-        <Route index element={<Navigate to="/admin" replace />} />
-        <Route path="admin" element={<AdminDashboard />} />
-        <Route path="admin/users" element={<UserManagement />} />
-        <Route path="admin/auth-requests" element={<AuthRequestList />} />
-        <Route path="admin/import" element={<ImportDataPage />} />
+        {/* Protected Routes */}
+        <Route 
+          path="/" 
+          element={
+            <PrivateRoute>
+              <AdminLayout />
+            </PrivateRoute>
+          }
+        >
+          <Route index element={<Navigate to="/admin" replace />} />
+          <Route path="admin" element={<AdminDashboard />} />
+          <Route path="admin/users" element={<UserManagement />} />
+          <Route path="admin/auth-requests" element={<AuthRequestList />} />
+          <Route path="admin/import" element={<ImportDataPage />} />
 
-        <Route path="regional" element={<RegionalDashboard />} />
-        <Route path="dashboard" element={<TeamMemberDashboard />} />
+          <Route path="regional" element={<RegionalDashboard />} />
+          <Route path="dashboard" element={<TeamMemberDashboard />} />
 
-        <Route path="salespeople" element={<SalespeopleList />} />
-        <Route path="stores" element={<StoresList />} />
-        <Route path="regions" element={<RegionsList />} />
-        <Route path="metrics/regions" element={<RegionMetrics />} />
-        <Route path="metrics/salespeople" element={<SalespersonMetrics />} />
-      </Route>
-    </Routes>
+          <Route path="salespeople" element={<SalespeopleList />} />
+          <Route path="stores" element={<StoresList />} />
+          <Route path="regions" element={<RegionsList />} />
+          <Route path="metrics/regions" element={<RegionMetrics />} />
+          <Route path="metrics/salespeople" element={<SalespersonMetrics />} />
+        </Route>
+      </Routes>
+    </AuthErrorBoundary>
   );
 };
 

@@ -1,25 +1,34 @@
 import { User } from 'firebase/auth';
 import { logOperation } from '../../firebase/logging';
-import { getNetworkStatus, waitForNetwork } from '../../firebase/network';
+import { getNetworkStatus } from '../../firebase/network';
 import { clearSessionState, setSessionState, getSessionState } from './state';
-import { parseTimestamp } from './handlers';
+import { retry } from '../../firebase/retry';
 import { retryAuthOperation } from '../retry';
 
 const SESSION_TIMEOUT = 55 * 60 * 1000; // 55 minutes
 const GRACE_PERIOD = 5 * 60 * 1000; // 5 minute grace period
-const NETWORK_TIMEOUT = 60000; // 60 seconds
+const TOKEN_REFRESH_ATTEMPTS = 3;
+const TOKEN_REFRESH_DELAY = 1000;
 
 export const validateTokenResult = async (user: User): Promise<boolean> => {
   try {
-    // Get token without forcing refresh
-    const tokenResult = await user.getIdTokenResult();
+    // Try to get a fresh token
+    const tokenResult = await retry(
+      () => user.getIdTokenResult(true),
+      {
+        maxAttempts: TOKEN_REFRESH_ATTEMPTS,
+        initialDelay: TOKEN_REFRESH_DELAY,
+        operation: 'validateTokenResult'
+      }
+    );
     
     // Check if token needs refresh
     const now = Date.now();
     const issuedAt = tokenResult.issuedAtTime ? new Date(tokenResult.issuedAtTime) : null;
     
     if (!issuedAt) {
-      throw new Error('Invalid token issue time');
+      logOperation('validateTokenResult', 'error', 'Invalid token issue time');
+      return false;
     }
 
     const tokenAge = now - issuedAt.getTime();

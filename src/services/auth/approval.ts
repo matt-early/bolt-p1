@@ -1,25 +1,21 @@
 import { 
   doc,
   collection,
-  query,
-  where,
-  getDocs,
   getDoc,
   writeBatch,
   serverTimestamp
 } from 'firebase/firestore';
 import { 
   fetchSignInMethodsForEmail,
-  createUserWithEmailAndPassword,
-  getAuth as getFirebaseAuth
+  createUserWithEmailAndPassword
 } from 'firebase/auth';
 import { FirebaseError } from 'firebase/app';
 import { getAuth, getDb } from '../firebase/db';
 import { UserProfile } from '../../types/auth';
 import { logOperation } from '../firebase/logging';
-import { retry } from '../firebase/retry';
-import { verifyAdminPermissions } from './admin/permissions';
 import { getCollection } from '../firebase/collections';
+import { checkUserRecords } from './checks';
+import { verifyAdminPermissions } from './admin/permissions';
 
 interface ApprovalResult {
   success: boolean;
@@ -36,69 +32,139 @@ interface UserExistenceCheck {
   exists: boolean;
   details: {
     auth: boolean;
+    authUid?: string;
     users: boolean;
     sales: boolean;
   };
 }
 
+const checkAuthAccount = async (email: string): Promise<{ exists: boolean; uid?: string }> => {
+  try {
+    const auth = getAuth();
+    const normalizedEmail = email.toLowerCase().trim();
+    const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
+
+    // If email exists in auth, try to get user record
+    if (methods.length > 0) {
+      try {
+        // Note: This will fail on client side due to permissions
+        // But that's expected - we just want to know if account exists
+        await auth.getUserByEmail(normalizedEmail);
+        return { exists: true };
+      } catch (error) {
+        // Expected error - we can't get user details from client SDK
+        return { exists: true };
+      }
+    }
+    
+    return { exists: false };
+  } catch (error) {
+    logOperation('checkAuthAccount', 'error', error);
+    return { exists: false };
+  }
+};
+
 const checkExistingUser = async (email: string) => {
   try {
-    const auth = getFirebaseAuth();
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Check Firebase Auth
-    const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
-    const existsInAuth = methods.length > 0;
-
-    // Check Firestore collections in parallel
-    const usersRef = getCollection('USERS');
-    const salesRef = getCollection('SALESPEOPLE');
-
-    const [userDocs, salesDocs] = await Promise.all([
-      getDocs(query(usersRef,
-        where('email', '==', normalizedEmail))),
-      getDocs(query(salesRef,
-        where('email', '==', normalizedEmail)))
+    // Check Firebase Auth and user records in parallel
+    const [authResult, records] = await Promise.all([
+      checkAuthAccount(normalizedEmail),
+      checkUserRecords(normalizedEmail)
     ]);
-
-    const existsInUsers = !userDocs.empty;
-    const existsInSales = !salesDocs.empty;
 
     logOperation('checkExistingUser', 'check', {
       email: normalizedEmail,
-      existsInAuth,
-      existsInUsers,
-      existsInSales
+      hasAuthAccount: authResult.exists,
+      authUid: authResult.uid,
+      hasUserRecord: records.users,
+      hasSalesRecord: records.sales
     });
 
     const result: UserExistenceCheck = {
-      exists: existsInAuth || existsInUsers || existsInSales,
+      exists: authResult.exists || records.users || records.sales,
       details: {
-        auth: existsInAuth,
-        users: existsInUsers,
-        sales: existsInSales
+        auth: authResult.exists,
+        authUid: authResult.uid,
+        users: records.users,
+        sales: records.sales
       }
     };
 
     return result;
   } catch (error) {
     logOperation('checkExistingUser', 'error', error);
-    throw error;
+    return {
+      exists: false,
+      details: { 
+        auth: false,
+        authUid: undefined,
+        users: false,
+        sales: false
+      }
+    };
   }
 };
 
 const getExistingUserError = (checkResult: UserExistenceCheck): string | null => {
   if (!checkResult.exists) return null;
+  if (checkResult.details.users && checkResult.details.sales) {
+    return 'This account already exists. Please check User Management for account status.';
+  }
 
+  // Has auth but no records - can proceed with record creation
+  if (checkResult.details.auth && !checkResult.details.users && !checkResult.details.sales) {
+    return 'Authentication account exists. Click Continue to create required profiles.';
+  }
+
+  // Has partial records - system inconsistency
   if (checkResult.details.users || checkResult.details.sales) {
-    return 'This email is already registered in our system. Please use a different email address.';
+    return 'Incomplete account records found. Please check User Management or contact administrator.';
   }
 
-  if (checkResult.details.auth) {
-    return 'This email is already registered with another account. Please use a different email address.';
-  }
+  return 'This email is already registered. Please use a different email address.';
+};
 
-  return 'This email address is not available. Please use a different one.';
+const createUserAccount = async (email: string, password: string, existingUid?: string) => {
+  try {
+    const auth = getAuth();
+    const normalizedEmail = email.toLowerCase().trim();
+    
+    // If we have an existing UID, return that user
+    if (existingUid) {
+      // We can't get user details from client SDK, just return the UID
+      return { uid: existingUid };
+    }
+    
+    // Check if auth account exists first
+    const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
+    if (methods.length > 0) {
+      throw new FirebaseError('auth/email-already-in-use', {
+        code: 'auth/email-already-in-use',
+        message: 'Email already exists in authentication'
+      });
+    }
+
+    // Create new user if no existing auth account
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+      return userCredential.user;
+    } catch (error) {
+      if (error instanceof FirebaseError && error.code === 'auth/email-already-in-use') {
+        // Double check if we can proceed with record creation
+        const records = await checkUserRecords(normalizedEmail);
+        if (!records.users && !records.sales) {
+          return { uid: 'existing' }; // Placeholder UID to trigger profile creation
+        }
+        throw error;
+      }
+      throw error;
+    }
+  } catch (error) {
+    logOperation('createUserAccount', 'error', error);
+    throw error;
+  }
 };
 
 export const approveAuthRequest = async (
@@ -106,42 +172,37 @@ export const approveAuthRequest = async (
   reviewerId: string,
   userData: Omit<UserProfile, 'id' | 'approved' | 'createdAt'> & { forceContinue?: boolean }
 ): Promise<ApprovalResult> => {
+  const normalizedEmail = userData.email?.toLowerCase().trim();
+
   try {
-    const auth = getFirebaseAuth();
+    // Verify admin permissions first
+    const hasPermission = await verifyAdminPermissions();
+    if (!hasPermission) {
+      throw new Error('You do not have permission to approve requests');
+    }
+
+    const auth = getAuth();
     const db = getDb();
-    const normalizedEmail = userData.email?.toLowerCase().trim();
 
     if (!normalizedEmail) {
-      return {
-        success: false,
-        error: 'Email address is required'
-      };
+      throw new Error('Email address is required');
     }
 
     if (!auth.currentUser) {
       throw new Error('Not authenticated');
     }
 
-    // Verify admin permissions
-    const hasPermission = await retry(
-      () => verifyAdminPermissions(),
-      { operation: 'approveAuthRequest.verifyPermissions' }
-    );
-
-    if (!hasPermission) {
-      throw new Error('You do not have permission to approve requests');
-    }
-
     // Check if email already exists
     if (!userData.forceContinue) {
       const existingUser = await checkExistingUser(normalizedEmail);
-      
-      // Return existing user details to let UI handle the flow
-      if (existingUser.exists) {
+      const errorMessage = getExistingUserError(existingUser);
+
+      // Only block if there are existing records
+      if (errorMessage) {
         return {
           success: false,
           existingUser: existingUser.details,
-          error: getExistingUserError(existingUser)
+          error: errorMessage
         };
       }
     }
@@ -152,39 +213,68 @@ export const approveAuthRequest = async (
     if (!requestDoc.exists()) {
       throw new Error('Authentication request not found');
     }
-    const requestData = requestDoc.data();
+    
+    // Check if request is already processed
+    const requestStatus = requestDoc.data().status;
+    if (requestStatus === 'approved' || requestStatus === 'rejected') {
+      throw new Error('This request has already been processed');
+    }
 
     // Double check the email hasn't been taken while processing
     const finalCheck = await checkExistingUser(normalizedEmail);
     if (finalCheck.exists) {
-      return {
-        success: false,
-        existingUser: finalCheck.details,
-        error: getExistingUserError(finalCheck) || 'Email is no longer available'
-      };
+      const errorMessage = getExistingUserError(finalCheck);
+      if (errorMessage && !userData.forceContinue) {
+        return {
+          success: false,
+          existingUser: finalCheck.details,
+          error: errorMessage
+        };
+      }
     }
 
     let userId: string;
 
     try {
-      // Try to create new user first
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
+      logOperation('approveAuthRequest', 'creating-user');
+      const user = await createUserAccount(
         normalizedEmail,
-        requestData.password
+        requestDoc.data().password,
+        finalCheck.details.authUid
       );
-      userId = userCredential.user.uid;
+      userId = user.uid;
       logOperation('approveAuthRequest', 'new-user-created', { userId });
     } catch (error) {
       logOperation('approveAuthRequest', 'error', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to create user'
-      };
+      
+      if (error instanceof FirebaseError) {
+        if (error.code === 'auth/email-already-in-use') {
+          // Check if we can proceed with record creation
+          const records = await checkUserRecords(normalizedEmail);
+          if (!records.users && !records.sales) {
+            return {
+              success: false,
+              existingUser: {
+                auth: true,
+                users: false,
+                sales: false
+              },
+              error: 'This email already has an authentication account. Click Continue to create the necessary profiles.'
+            };
+          }
+        }
+        return {
+          success: false,
+          error: error.message || 'Failed to create user account'
+        };
+      }
+      throw error;
     }
 
     // Start batch write
     const batch = writeBatch(db);
+
+    logOperation('approveAuthRequest', 'creating-profiles');
 
     // Create user profile
     const userRef = doc(db, 'users', userId);
@@ -218,11 +308,12 @@ export const approveAuthRequest = async (
     // Update request status
     batch.update(requestRef, {
       status: 'approved',
-      reviewedBy: auth.currentUser.uid,
+      reviewedBy: reviewerId,
       reviewedAt: serverTimestamp()
     });
 
     // Commit all changes
+    logOperation('approveAuthRequest', 'committing-changes');
     await batch.commit();
     logOperation('approveAuthRequest', 'success', { userId });
     
@@ -238,10 +329,6 @@ export const approveAuthRequest = async (
     if (error instanceof FirebaseError) {
       switch (error.code) {
         case 'auth/email-already-in-use':
-          logOperation('approveAuthRequest', 'error', {
-            code: error.code,
-            email: normalizedEmail
-          });
           return {
             success: false, 
             error: 'This email is already registered with another account. Please use a different email address.'
@@ -259,7 +346,7 @@ export const approveAuthRequest = async (
         default:
           return {
             success: false,
-            error: `Failed to approve request: ${error.message}`
+            error: error.message || 'Failed to approve request'
           };
       }
     }

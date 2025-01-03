@@ -9,14 +9,11 @@ import { getAuth } from '../services/firebase/db';
 import { initializeFirebaseServices } from '../services/firebase/init';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { logOperation } from '../services/firebase/logging';
-import { initNetworkMonitoring, getNetworkStatus, waitForNetwork } from '../services/firebase/network';
-import { UserProfile } from '../types/auth';
+import { initNetworkMonitoring, getNetworkStatus } from '../services/firebase/network';
+import type { UserProfile } from '../types/auth';
 import { signIn as firebaseSignIn } from '../services/auth';
 import { loadUserProfile } from '../services/auth/init';
-import { 
-  initializeAuthSession,
-  clearSessionState
-} from '../services/auth/session';
+import { initializeAuthSession, clearSessionState } from '../services/auth/session';
 // Import AuthErrorBoundary only once
 
 interface AuthContextType {
@@ -44,101 +41,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [firebaseInitialized, setFirebaseInitialized] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(false);
-  const [initAttempts, setInitAttempts] = useState(0);
   const [networkError, setNetworkError] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState<boolean>(false);
+  const [initAttempts, setInitAttempts] = useState(0);
   const MAX_INIT_ATTEMPTS = 3;
   
-  // Initialize Firebase
-  useEffect(() => {
-    const init = async () => {
-      try {
-        setIsInitializing(true);
-        setError(null);
-        setNetworkError(null);
-
-        if (firebaseInitialized) return;
-        if (initAttempts >= MAX_INIT_ATTEMPTS) {
-          const { isOnline } = getNetworkStatus();
-          const errorMessage = 
-            isOnline
-              ? 'Failed to initialize Firebase after multiple attempts' 
-              : 'No internet connection. Please check your network and try again.';
-          
-          setError(errorMessage);
-          if (!isOnline) {
-            setNetworkError(errorMessage);
-          }
-          return;
-        }
-        
-        // Wait for network if offline
-        if (!navigator.onLine) {
-          const hasNetwork = await waitForNetwork(30000); // 30 second timeout
-          if (!hasNetwork) {
-            throw new Error('No network connection available');
-          }
-        }
-
-        await initializeFirebaseServices();
-        setFirebaseInitialized(true);
-        logOperation('AuthProvider', 'firebase-initialized');
-      } catch (err) {
-        const { isOnline } = getNetworkStatus();
-        const message = !isOnline
-          ? 'No internet connection. Please check your network and try again.'
-          : err instanceof Error ? err.message : 'Failed to initialize Firebase';
-        
-        if (!isOnline) {
-          setNetworkError(message);
-        } else {
-          setError(message);
-        }
-        
-        console.error('Firebase initialization error:', err);
-        setInitAttempts(prev => prev + 1);
-        setTimeout(init, 2000 * (initAttempts + 1)); // Exponential backoff
-      } finally {
-        if (mounted) {
-          setIsInitializing(false);
-        }
-      }
-    };
-    
-    let mounted = true;
-    init();
-    return () => {
-      mounted = false;
-    };
-  }, [firebaseInitialized, initAttempts]);
-
   // Monitor network status
   useEffect(() => {
     const cleanup = initNetworkMonitoring(
       // On online
       () => {
-        if (!firebaseInitialized && !isInitializing) { // Now isInitializing is defined
-          setInitAttempts(0); // Reset attempts
-          setError(null);
-          setFirebaseInitialized(false); // Trigger re-initialization
-        }
+        setError(null);
+        setNetworkError(null);
       },
       // On offline
       () => {
-        setError('No internet connection. Please check your network and try again.');
+        setNetworkError('No internet connection. Please check your network and try again.');
       }
     );
 
     return cleanup;
-  }, [firebaseInitialized, isInitializing]);
+  }, []);
 
   // Handle auth state changes
   useEffect(() => {
-    if (!firebaseInitialized) return;
-
     let mounted = true;
     let unsubscribe: (() => void) | undefined;
+    
+    if (!isInitialized) {
+      return;
+    }
+    
     const auth = getAuth();
     
     const clearAuthState = () => {
@@ -188,7 +121,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       mounted = false;
       if (unsubscribe) unsubscribe();
     };
-  }, [firebaseInitialized]);
+  }, [isInitialized]);
+
+  // Initialize Firebase on mount
+  useEffect(() => {
+    const init = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        
+        if (initAttempts >= MAX_INIT_ATTEMPTS) {
+          setError('Failed to initialize after multiple attempts');
+          return;
+        }
+
+        await initializeFirebaseServices();
+        setIsInitialized(true);
+        setInitAttempts(0);
+      } catch (error) {
+        setInitAttempts(prev => prev + 1);
+        setError('Failed to initialize Firebase. Please try again.');
+        logOperation('AuthProvider.init', 'error', error);
+        
+        // Retry after delay if not max attempts
+        if (initAttempts < MAX_INIT_ATTEMPTS - 1) {
+          setTimeout(init, 2000 * (initAttempts + 1));
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+    
+    let mounted = true;
+    init();
+    return () => {
+      mounted = false;
+    };
+  }, [initAttempts]);
 
   const signIn = async (email: string, password: string) => {
     setError(null);
@@ -263,7 +234,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     error
   };
 
-  if (!firebaseInitialized || loading) {
+  if (loading || !isInitialized) {
     return <LoadingScreen 
       error={error}
       networkError={networkError}
