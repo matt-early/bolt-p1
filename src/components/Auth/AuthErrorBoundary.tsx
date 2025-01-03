@@ -1,7 +1,7 @@
 import React, { Component, ErrorInfo } from 'react';
 import { logOperation } from '../../services/firebase/logging';
-import { clearSessionState } from '../../services/auth/session/state';
-import { AlertCircle } from 'lucide-react';
+import { clearSessionState } from '../../services/auth/session';
+import { AlertTriangle } from 'lucide-react';
 
 interface Props {
   children: React.ReactNode;
@@ -47,13 +47,13 @@ export class AuthErrorBoundary extends Component<Props, State> {
         <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-md max-w-md w-full p-6">
             <div className="flex items-center justify-center mb-4">
-              <AlertCircle className="h-12 w-12 text-red-500" />
+              <AlertTriangle className="h-12 w-12 text-red-500" />
             </div>
             <h2 className="text-xl font-semibold text-gray-900 text-center mb-4">
               Authentication Error
             </h2>
             <p className="text-gray-600 text-center mb-6">
-              There was a problem with your authentication session. Please try signing in again.
+              {this.state.error?.message || 'There was a problem with your authentication session. Please try signing in again.'}
             </p>
             <button
               onClick={() => window.location.href = '/login'}

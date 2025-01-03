@@ -1,2 +1,7 @@
 export { checkUserRecords } from './userRecords';
-export type { UserRecordsCheck } from './userRecords';
+export interface UserRecordsCheck {
+  users: boolean;
+  sales: boolean;
+  hasAuth: boolean;
+  uid?: string;
+}

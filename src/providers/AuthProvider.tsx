@@ -12,9 +12,8 @@ import { logOperation } from '../services/firebase/logging';
 import { initNetworkMonitoring, getNetworkStatus } from '../services/firebase/network';
 import type { UserProfile } from '../types/auth';
 import { signIn as firebaseSignIn } from '../services/auth';
-import { loadUserProfile } from '../services/auth/init';
+import { loadUserProfile } from '../services/auth/init'; 
 import { initializeAuthSession, clearSessionState } from '../services/auth/session';
-// Import AuthErrorBoundary only once
 
 interface AuthContextType {
   currentUser: User | null;
@@ -43,9 +42,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
-  const [initAttempts, setInitAttempts] = useState(0);
+  const [initAttempts, setInitAttempts] = useState<number>(0);
+  const [isInitializing, setIsInitializing] = useState<boolean>(false);
   const MAX_INIT_ATTEMPTS = 3;
   
+  // Initialize Firebase on mount
+  useEffect(() => {
+    let mounted = true;
+    const init = async () => {
+      if (isInitialized || isInitializing) return;
+      
+      try {
+        setIsInitializing(true);
+        setLoading(true);
+        setError(null);
+        setNetworkError(null);
+        
+        if (initAttempts >= MAX_INIT_ATTEMPTS) {
+          throw new Error('Failed to initialize after multiple attempts');
+        }
+
+        await initializeFirebaseServices();
+        if (mounted) {
+          setIsInitialized(true);
+          setInitAttempts(0);
+        }
+      } catch (error) {
+        if (mounted) {
+          setInitAttempts(prev => prev + 1);
+          setError('Failed to initialize Firebase. Please try again.');
+          logOperation('AuthProvider.init', 'error', error);
+          
+          // Retry after delay if not max attempts
+          if (initAttempts < MAX_INIT_ATTEMPTS - 1) {
+            setTimeout(init, 2000 * (initAttempts + 1));
+          }
+        }
+      } finally {
+        if (mounted) {
+          setIsInitializing(false);
+          setLoading(false);
+        }
+      }
+    };
+
+    init();
+    return () => {
+      mounted = false;
+    };
+  }, [initAttempts, isInitialized, isInitializing]);
+
   // Monitor network status
   useEffect(() => {
     const cleanup = initNetworkMonitoring(
@@ -126,12 +172,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Initialize Firebase on mount
   useEffect(() => {
     const init = async () => {
+      if (isInitialized || isInitializing) return;
+      
       try {
+        setIsInitializing(true);
         setLoading(true);
         setError(null);
         
         if (initAttempts >= MAX_INIT_ATTEMPTS) {
           setError('Failed to initialize after multiple attempts');
+          setLoading(false);
           return;
         }
 
@@ -148,9 +198,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setTimeout(init, 2000 * (initAttempts + 1));
         }
       } finally {
-        if (mounted) {
-          setLoading(false);
-        }
+        setIsInitializing(false);
+        setLoading(false);
       }
     };
     
@@ -231,7 +280,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     resetPassword,
     signOut,
     loading,
-    error
+    error,
+    isInitialized
   };
 
   if (loading || !isInitialized) {

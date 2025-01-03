@@ -42,21 +42,14 @@ const checkAuthAccount = async (email: string): Promise<{ exists: boolean; uid?:
   try {
     const auth = getAuth();
     const normalizedEmail = email.toLowerCase().trim();
-    const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
-
-    // If email exists in auth, try to get user record
-    if (methods.length > 0) {
-      try {
-        // Note: This will fail on client side due to permissions
-        // But that's expected - we just want to know if account exists
-        await auth.getUserByEmail(normalizedEmail);
-        return { exists: true };
-      } catch (error) {
-        // Expected error - we can't get user details from client SDK
-        return { exists: true };
-      }
-    }
     
+    // Check if email exists in auth system
+    const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
+    if (methods.length > 0) {
+      logOperation('checkAuthAccount', 'exists');
+      return { exists: true };
+    }
+
     return { exists: false };
   } catch (error) {
     logOperation('checkAuthAccount', 'error', error);
@@ -133,31 +126,25 @@ const createUserAccount = async (email: string, password: string, existingUid?: 
     
     // If we have an existing UID, return that user
     if (existingUid) {
-      // We can't get user details from client SDK, just return the UID
-      return { uid: existingUid };
+      logOperation('createUserAccount', 'using-existing-uid', { uid: existingUid });
+      return { user: { uid: existingUid } };
     }
     
-    // Check if auth account exists first
-    const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
-    if (methods.length > 0) {
-      throw new FirebaseError('auth/email-already-in-use', {
-        code: 'auth/email-already-in-use',
-        message: 'Email already exists in authentication'
-      });
-    }
-
     // Create new user if no existing auth account
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
-      return userCredential.user;
+      logOperation('createUserAccount', 'created-new-user', { uid: userCredential.user.uid });
+      return { user: userCredential.user };
     } catch (error) {
       if (error instanceof FirebaseError && error.code === 'auth/email-already-in-use') {
         // Double check if we can proceed with record creation
         const records = await checkUserRecords(normalizedEmail);
-        if (!records.users && !records.sales) {
-          return { uid: 'existing' }; // Placeholder UID to trigger profile creation
+        if (records.uid) {
+          logOperation('createUserAccount', 'using-existing-records', { uid: records.uid });
+          return { user: { uid: records.uid } };
+        } else {
+          throw new Error('Authentication account exists but unable to retrieve UID');
         }
-        throw error;
       }
       throw error;
     }
@@ -237,12 +224,15 @@ export const approveAuthRequest = async (
 
     try {
       logOperation('approveAuthRequest', 'creating-user');
-      const user = await createUserAccount(
+      const { user } = await createUserAccount(
         normalizedEmail,
         requestDoc.data().password,
         finalCheck.details.authUid
       );
       userId = user.uid;
+      if (!userId) {
+        throw new Error('Failed to get valid user ID');
+      }
       logOperation('approveAuthRequest', 'new-user-created', { userId });
     } catch (error) {
       logOperation('approveAuthRequest', 'error', error);
