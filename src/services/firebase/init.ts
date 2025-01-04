@@ -8,17 +8,24 @@ import { initNetworkMonitoring } from './network';
 import { getFirebaseConfig } from '../../config/firebase-config';
 import { setDb, setAuth } from './db';
 
-const INIT_TIMEOUT = 30000; // 30 second timeout
+const INIT_TIMEOUT = 15000; // 15 second timeout
 const MAX_RETRIES = 3;
-const RETRY_DELAY = 5000;
-const BACKGROUND_RECONNECT_DELAY = 10000;
+const RETRY_DELAY = 1000;
+const RECONNECT_DELAY = 1000;
 
 // Track initialization state
 let initialized = false;
 let initializationPromise: Promise<void> | null = null;
 let app: ReturnType<typeof initializeApp> | null = null;
 let networkCleanup: (() => void) | null = null;
-let backgroundReconnectTimeout: NodeJS.Timeout | null = null;
+let reconnectTimeout: number | null = null;
+
+const clearReconnectTimeout = () => {
+  if (reconnectTimeout) {
+    window.clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+};
 
 export const getFirebaseApp = async () => {
   if (!app) {
@@ -42,6 +49,29 @@ const initializeWithTimeout = async () => {
 const initializeCore = async () => {
   try {
     const config = getFirebaseConfig();
+    
+    // Wait for any existing app to be fully initialized
+    if (app) {
+      try {
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        return { auth, db };
+      } catch (error) {
+        logOperation('initializeCore', 'warning', 'Existing app not ready');
+      }
+    }
+    
+    // Check if app already exists
+    try {
+      if (app) {
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        return { auth, db };
+      }
+    } catch (error) {
+      logOperation('initializeCore', 'warning', 'Failed to get existing app');
+    }
+    
     app = initializeApp(config);
     const auth = getAuth(app);
     const db = getFirestore(app);
@@ -56,19 +86,16 @@ const initializeCore = async () => {
     try {
       await enableIndexedDbPersistence(db);
       logOperation('initializeCore', 'persistence-enabled');
-      
-      // Set up background reconnection handler
-      db.enableNetwork().catch(error => {
-        logOperation('initializeCore', 'network-error', error);
-        scheduleBackgroundReconnect();
-      });
-      
+      initialized = true;
+      initialized = true;
     } catch (err: any) {
       if (err.code === 'failed-precondition') {
         logOperation('initializeCore', 'warning', 'Multiple tabs open');
       } else if (err.code === 'unimplemented') {
         logOperation('initializeCore', 'warning', 'Persistence not supported');
       }
+      // Still mark as initialized even if persistence fails
+      initialized = true;
     }
 
     return { auth, db };
@@ -78,52 +105,40 @@ const initializeCore = async () => {
   }
 };
 
-const scheduleBackgroundReconnect = () => {
-  if (backgroundReconnectTimeout) {
-    clearTimeout(backgroundReconnectTimeout);
-  }
-  
-  backgroundReconnectTimeout = setTimeout(async () => {
-    try {
-      const db = getFirestore();
-      await db.enableNetwork();
-      logOperation('backgroundReconnect', 'success');
-    } catch (error) {
-      logOperation('backgroundReconnect', 'error', error);
-      scheduleBackgroundReconnect(); // Reschedule if failed
-    }
-  }, BACKGROUND_RECONNECT_DELAY);
-};
-
 const setupNetworkMonitoring = () => {
   return initNetworkMonitoring(
-    // On online - retry initialization if failed
+    // On online
     async () => {
+      clearReconnectTimeout();
       if (!initialized && !initializationPromise) {
         logOperation('network', 'online', 'Retrying initialization');
         try {
           await initializeFirebaseServices();
         } catch (error) {
           logOperation('network.retry', 'error', error);
+          scheduleReconnect();
         }
       }
     },
-    // On offline - log error
+    // On offline
     () => {
       logOperation('network', 'offline');
+      scheduleReconnect();
     }
   );
 };
 
-// Clean up on module unload
-window.addEventListener('unload', () => {
-  if (backgroundReconnectTimeout) {
-    clearTimeout(backgroundReconnectTimeout);
-  }
-  if (networkCleanup) {
-    networkCleanup();
-  }
-});
+const scheduleReconnect = () => {
+  clearReconnectTimeout();
+  reconnectTimeout = window.setTimeout(async () => {
+    try {
+      await initializeFirebaseServices();
+    } catch (error) {
+      logOperation('reconnect', 'error', error);
+      scheduleReconnect(); // Schedule another attempt
+    }
+  }, RECONNECT_DELAY);
+};
 
 export const initializeFirebaseServices = async () => {
   if (initialized) return;
@@ -150,6 +165,7 @@ export const initializeFirebaseServices = async () => {
           await initializeWithTimeout();
           initialized = true;
           retryCount = 0;
+          clearReconnectTimeout(); // Clear any pending reconnect
           logOperation('initializeFirebaseServices', 'success');
           return;
         } catch (error) {
@@ -158,15 +174,16 @@ export const initializeFirebaseServices = async () => {
 
           logOperation('initializeFirebaseServices', 'retry', {
             attempt: retryCount,
-            error: error.message
+            error: error instanceof Error ? error.message : 'Unknown error'
           });
           
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * Math.pow(2, retryCount - 1)));
         }
       }
     } catch (error) {
       logOperation('initializeFirebaseServices', 'error', error);
       initialized = false;
+      scheduleReconnect();
       throw error;
     } finally {
       initializationPromise = null;
@@ -175,6 +192,14 @@ export const initializeFirebaseServices = async () => {
 
   return initializationPromise;
 };
+
+// Clean up on module unload
+window.addEventListener('unload', () => {
+  clearReconnectTimeout();
+  if (networkCleanup) {
+    networkCleanup();
+  }
+});
 
 // Export the app instance
 export { app };

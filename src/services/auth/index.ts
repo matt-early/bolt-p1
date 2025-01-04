@@ -1,14 +1,21 @@
-export * from './signIn';
-export * from './passwordReset';
-export * from './init';
-export { handleAuthError, AUTH_ERROR_MESSAGES } from './errors';
-export { getAuthSettings } from './settings';
-export { initializeAdminUser } from './admin';
-export { createAuthRequest, fetchPendingAuthRequests } from './requests';
-export { validateSession } from './session/validation';
-export { refreshSession } from './session/refresh';
-export { initializeAuthSession } from './session/session';
+// Core auth functionality
+export { authenticateUser } from './signIn';
+export { handleAuthError } from './errors';
+export { loadUserProfile } from './init';
 
-// Re-export commonly used types
+// Session management
+export {
+  initializeAuthSession,
+  validateSession,
+  refreshSession,
+  setupSessionRefresh,
+  validateNetworkState,
+  setupAuthCleanup,
+  registerCleanup,
+  clearSessionState,
+  setSessionState
+} from './session';
+
+// Types
 export type { AuthError } from './errors';
 export type { UserRole, UserProfile, AuthRequest } from '../../types/auth';

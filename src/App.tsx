@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './providers/AuthProvider';
 import { PrivateRoute } from './components/Auth/PrivateRoute';
 import { SignInPage } from './components/Auth/SignInPage';
@@ -22,13 +22,14 @@ import { LoadingScreen } from './components/common/LoadingScreen';
 
 const App: React.FC = () => {
   const { loading, currentUser } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return <LoadingScreen />;
   }
 
   // Redirect to login if not authenticated
-  if (!currentUser && window.location.pathname !== '/login') {
+  if (!currentUser && !['/', '/login', '/register', '/forgot-password'].includes(location.pathname)) {
     return <Navigate to="/login" replace />;
   }
 

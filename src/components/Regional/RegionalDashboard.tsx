@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../hooks/useAuth';
 import { Store, Region } from '../../types';
 import { fetchStoresByRegion } from '../../services/stores';
 import { fetchRegions } from '../../services/regions';
 import { DateRangeSelector } from '../Dashboard/DateRangeSelector';
 import { PerformanceMetrics } from '../Dashboard/PerformanceMetrics';
 import { SupplierPerformance } from '../Dashboard/SupplierPerformance';
+import { suppliers } from '../../data/suppliers';
+import { DateSelection } from '../../types';
 import { AttachmentRateChart } from '../Dashboard/AttachmentRateChart';
 import { StorePerformanceTable } from './StorePerformanceTable';
 import { DateRange } from '../../utils/dateUtils';
@@ -14,6 +16,10 @@ export const RegionalDashboard: React.FC = () => {
   const { userProfile } = useAuth();
   const [stores, setStores] = useState<Store[]>([]);
   const [region, setRegion] = useState<Region | null>(null);
+  const [customRange, setCustomRange] = useState<DateSelection>({
+    startDate: null,
+    endDate: null
+  });
   const [dateRange, setDateRange] = useState<DateRange>('mtd');
   const [selectedPeriod, setSelectedPeriod] = useState({
     month: new Date().getMonth(),
@@ -78,6 +84,8 @@ export const RegionalDashboard: React.FC = () => {
       <DateRangeSelector
         selectedRange={dateRange}
         onRangeChange={setDateRange}
+        customRange={customRange}
+        onCustomRangeChange={setCustomRange}
         selectedPeriod={selectedPeriod}
         onPeriodChange={setSelectedPeriod}
       />
@@ -92,7 +100,7 @@ export const RegionalDashboard: React.FC = () => {
         <div className="lg:col-span-2">
           <SupplierPerformance
             metrics={[]} // TODO: Add metrics data
-            suppliers={[]} // TODO: Add suppliers data
+            suppliers={suppliers}
             dateRange={dateRange}
             selectedPeriod={selectedPeriod}
           />

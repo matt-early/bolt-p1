@@ -1,26 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { LogIn, Mail, Lock } from 'lucide-react';
-import { getAuth, getDb } from '../../services/firebase';
-import { doc, getDoc } from 'firebase/firestore';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { FirebaseError } from 'firebase/app';
-import { AUTH_ERROR_MESSAGES } from '../../services/auth/errors';
+import { useAuth } from '../../hooks/useAuth';
 import { logOperation } from '../../services/firebase/logging';
-import { AUTH_SETTINGS } from '../../config/auth-settings';
-
-const getErrorMessage = (error: unknown): string => {
-  if (error instanceof FirebaseError) {
-    return AUTH_ERROR_MESSAGES[error.code as keyof typeof AUTH_ERROR_MESSAGES] || 
-           AUTH_ERROR_MESSAGES.default;
-  }
-  
-  if (!navigator.onLine) {
-    return 'No internet connection. Please check your network and try again.';
-  }
-  
-  return 'An unexpected error occurred. Please try again.';
-};
+import { handleAuthError } from '../../services/auth';
 
 export const SignInPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -28,6 +11,7 @@ export const SignInPage: React.FC = () => {
   const [error, setError] = useState('');
   const [networkStatus, setNetworkStatus] = useState(navigator.onLine);
   const [loading, setLoading] = useState(false);
+  const { signIn } = useAuth();
   const navigate = useNavigate();
 
   // Monitor network status
@@ -47,49 +31,35 @@ export const SignInPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    if (loading) return;
+    
+    setLoading(true);
+    setError('');
+    
+    if (!networkStatus) {
+      setError('No internet connection. Please check your network and try again.');
+      setLoading(false);
+      return;
+    }
+
     if (!email.trim() || !password.trim()) {
       setError('Email and password are required');
+      setLoading(false);
       return;
     }
     
     try {
-      setLoading(true);
-      setError('');
-
-      if (!networkStatus) {
-        throw new Error('No internet connection. Please check your network and try again.');
-      }
+      logOperation('SignInPage.handleSubmit', 'start');
       
-      const auth = getAuth();
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      // Add small delay to prevent rapid re-submission
+      await new Promise(resolve => setTimeout(resolve, 100));
       
-      // Check if admin user
-      const isAdmin = userCredential.user.email === AUTH_SETTINGS.DEFAULT_ADMIN.EMAIL;
-      if (isAdmin) {
-        navigate('/admin');
-        return;
-      }
-      
-      // Check user role in Firestore
-      const db = getDb();
-      const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
-      const role = userDoc.data()?.role;
-      
-      // Route based on role
-      if (role === 'admin') {
-        navigate('/admin');
-      } else if (role === 'regional') {
-        navigate('/regional');
-      } else {
-        navigate('/dashboard');
-      }
-      
-      setError(''); // Clear any existing errors
-      logOperation('signIn', 'success');
+      await signIn(email, password);
+      logOperation('SignInPage.handleSubmit', 'success');
     } catch (error) {
-      const errorMessage = getErrorMessage(error);
-      setError(errorMessage);
-      logOperation('signIn', 'error', { message: errorMessage });
+      const { message } = handleAuthError(error);
+      setError(message);
+      logOperation('SignInPage.handleSubmit', 'error', error);
     } finally {
       setLoading(false);
     }

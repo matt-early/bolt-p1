@@ -1,7 +1,7 @@
 import React, { Component, ErrorInfo } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { logOperation } from '../../services/firebase/logging';
 import { clearSessionState } from '../../services/auth/session';
-import { AlertTriangle } from 'lucide-react';
 
 interface Props {
   children: React.ReactNode;

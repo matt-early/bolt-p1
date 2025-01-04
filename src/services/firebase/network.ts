@@ -18,28 +18,32 @@ let networkStatus: NetworkStatus = {
 
 const MIN_RETRY_INTERVAL = 5000; // Minimum 5 seconds between retries
 
-// Initialize network monitoring immediately
-const initializeNetworkStatus = () => {
+export const getNetworkStatus = (): NetworkStatus => ({ ...networkStatus });
+
+export const initNetworkMonitoring = (
+  onOnline?: () => void,
+  onOffline?: () => void
+) => {
   const handleOnline = () => {
     networkStatus = {
+      ...networkStatus,
       isOnline: true,
       lastOnline: new Date(),
-      isInitialized: true,
-      connectionAttempts: 0,
-      lastAttempt: null
+      connectionAttempts: 0
     };
     logOperation('network', 'online');
+    onOnline?.();
   };
 
   const handleOffline = () => {
     networkStatus = {
       ...networkStatus,
       isOnline: false,
-      isInitialized: true,
       connectionAttempts: networkStatus.connectionAttempts + 1,
       lastAttempt: new Date()
     };
     logOperation('network', 'offline');
+    onOffline?.();
   };
 
   window.addEventListener('online', handleOnline);
@@ -48,37 +52,6 @@ const initializeNetworkStatus = () => {
   // Set initial status
   networkStatus.isInitialized = true;
   networkStatus.isOnline = navigator.onLine;
-
-  return () => {
-    window.removeEventListener('online', handleOnline);
-    window.removeEventListener('offline', handleOffline);
-  };
-};
-
-// Initialize immediately
-initializeNetworkStatus();
-
-export const getNetworkStatus = (): NetworkStatus => networkStatus;
-
-export const initNetworkMonitoring = (
-  onOnline?: () => void,
-  onOffline?: () => void
-) => {
-  const handleOnline = () => {
-    networkStatus.isOnline = true;
-    networkStatus.lastOnline = new Date();
-    logOperation('network', 'online');
-    onOnline?.();
-  };
-
-  const handleOffline = () => {
-    networkStatus.isOnline = false;
-    logOperation('network', 'offline');
-    onOffline?.();
-  };
-
-  window.addEventListener('online', handleOnline);
-  window.addEventListener('offline', handleOffline);
 
   return () => {
     window.removeEventListener('online', handleOnline);
@@ -97,29 +70,23 @@ export const waitForNetwork = async (timeout = 30000): Promise<boolean> => {
     }
   }
 
-  let timeoutId: NodeJS.Timeout;
-  let cleanup: (() => void) | null = null;
-  
   return new Promise((resolve) => {
-    timeoutId = setTimeout(() => {
-      if (cleanup) cleanup();
+    const timeoutId = setTimeout(() => {
+      cleanup();
       resolve(false);
     }, timeout);
-    
+
     const handleOnline = () => {
-      clearTimeout(timeoutId);
-      if (cleanup) cleanup();
+      cleanup();
       networkStatus.lastAttempt = new Date();
       resolve(true);
     };
 
-    window.addEventListener('online', handleOnline);
-    
-    cleanup = () => {
+    const cleanup = () => {
       clearTimeout(timeoutId);
       window.removeEventListener('online', handleOnline);
     };
-    
-    return cleanup;
+
+    window.addEventListener('online', handleOnline);
   });
 };

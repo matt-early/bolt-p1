@@ -1,19 +1,25 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   User,
   onAuthStateChanged,
   sendPasswordResetEmail, 
   signOut as firebaseSignOut
 } from 'firebase/auth';
+import { createContext, useContext } from 'react';
 import { getAuth } from '../services/firebase/db';
 import { initializeFirebaseServices } from '../services/firebase/init';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { logOperation } from '../services/firebase/logging';
 import { initNetworkMonitoring, getNetworkStatus } from '../services/firebase/network';
-import type { UserProfile } from '../types/auth';
-import { signIn as firebaseSignIn } from '../services/auth';
-import { loadUserProfile } from '../services/auth/init'; 
-import { initializeAuthSession, clearSessionState } from '../services/auth/session';
+import { UserProfile } from '../types/auth';
+import { 
+  authenticateUser, 
+  loadUserProfile, 
+  initializeAuthSession, 
+  clearSessionState,
+  handleAuthError 
+} from '../services/auth';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -23,6 +29,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   loading: boolean;
   error: string | null;
+  isInitialized: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -36,6 +43,7 @@ export const useAuth = () => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,10 +51,138 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const [initAttempts, setInitAttempts] = useState<number>(0);
-  const [isInitializing, setIsInitializing] = useState<boolean>(false);
+  const [isInitializing, setIsInitializing] = useState<boolean>(true);
   const MAX_INIT_ATTEMPTS = 3;
-  
+
+  // Initialize Firebase and auth state
+  useEffect(() => {
+    let mounted = true;
+    let unsubscribe: (() => void) | undefined;
+
+    const initialize = async () => {
+      if (isInitialized) return;
+      
+      try {
+        setLoading(true);
+        setError(null);
+        
+        await initializeFirebaseServices();
+        
+        if (!mounted) return;
+        
+        setIsInitialized(true);
+        setInitAttempts(0);
+
+        // Set up auth state listener after initialization
+        const auth = getAuth();
+        unsubscribe = onAuthStateChanged(auth, handleAuthStateChange);
+      } catch (error) {
+        if (!mounted) return;
+        
+        setInitAttempts(prev => prev + 1);
+        setError('Failed to initialize authentication. Please try again.');
+        logOperation('AuthProvider.init', 'error', error);
+        
+        if (initAttempts < MAX_INIT_ATTEMPTS - 1) {
+          setTimeout(initialize, 2000 * (initAttempts + 1));
+        }
+      } finally {
+        if (mounted) {
+          setIsInitializing(false);
+          setLoading(false);
+        }
+      }
+    };
+
+    initialize();
+
+    return () => {
+      mounted = false;
+      if (unsubscribe) unsubscribe();
+    };
+  }, [initAttempts, isInitialized, isInitializing]);
+
+  // Handle auth state changes
+  const handleAuthStateChange = async (user: User | null) => {
+    try {
+      if (user) {
+        setLoading(true);
+        
+        // Initialize auth session
+        const isValid = await initializeAuthSession(user);
+        if (!isValid) {
+          clearAuthState();
+          return;
+        }
+
+        // Load user profile
+        const profile = await loadUserProfile(user.uid);
+        if (profile) {
+          setUserProfile(profile);
+          sessionStorage.setItem('isAuthenticated', 'true');
+          setCurrentUser(user);
+        } else {
+          logOperation('authStateChange', 'warning', 'No user profile found');
+          clearAuthState();
+        }
+      } else {
+        clearAuthState();
+      }
+    } catch (err) {
+      logOperation('authStateChange', 'error', err);
+      clearAuthState();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearAuthState = () => {
+    clearSessionState();
+    setUserProfile(null);
+    setCurrentUser(null);
+  };
   // Initialize Firebase on mount
+  const signIn = async (email: string, password: string) => {
+    setError(null);
+    setLoading(true);
+    
+    try {
+      logOperation('AuthProvider.signIn', 'start', { email });
+      
+      if (!isInitialized) {
+        throw new Error('Authentication service not initialized');
+      }
+
+      const { user, profile, role } = await authenticateUser(email, password);
+      
+      // Set auth state
+      setCurrentUser(user);
+      setUserProfile(profile);
+      sessionStorage.setItem('isAuthenticated', 'true');
+      sessionStorage.setItem('userRole', role);
+      
+      // Determine redirect based on role
+      const redirectPath = role === 'admin' ? '/admin' :
+                         role === 'regional' ? '/regional' : 
+                         '/dashboard';
+       
+      logOperation('AuthProvider.signIn', 'success', { 
+        role,
+        redirect: redirectPath
+      });
+      
+      // Use navigate instead of window.location
+      navigate(redirectPath, { replace: true });
+    } catch (error) {
+      logOperation('signIn', 'error', error);
+      const { message } = handleAuthError(error);
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
     const init = async () => {
@@ -169,82 +305,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [isInitialized]);
 
-  // Initialize Firebase on mount
-  useEffect(() => {
-    const init = async () => {
-      if (isInitialized || isInitializing) return;
-      
-      try {
-        setIsInitializing(true);
-        setLoading(true);
-        setError(null);
-        
-        if (initAttempts >= MAX_INIT_ATTEMPTS) {
-          setError('Failed to initialize after multiple attempts');
-          setLoading(false);
-          return;
-        }
-
-        await initializeFirebaseServices();
-        setIsInitialized(true);
-        setInitAttempts(0);
-      } catch (error) {
-        setInitAttempts(prev => prev + 1);
-        setError('Failed to initialize Firebase. Please try again.');
-        logOperation('AuthProvider.init', 'error', error);
-        
-        // Retry after delay if not max attempts
-        if (initAttempts < MAX_INIT_ATTEMPTS - 1) {
-          setTimeout(init, 2000 * (initAttempts + 1));
-        }
-      } finally {
-        setIsInitializing(false);
-        setLoading(false);
-      }
-    };
-    
-    let mounted = true;
-    init();
-    return () => {
-      mounted = false;
-    };
-  }, [initAttempts]);
-
-  const signIn = async (email: string, password: string) => {
-    setError(null);
-    try {
-      logOperation('AuthProvider.signIn', 'start', { email });
-      
-      const { user, profile, role } = await firebaseSignIn(email, password);
-      
-      // Set auth state
-      setCurrentUser(user);
-      setUserProfile(profile);
-      sessionStorage.setItem('isAuthenticated', 'true');
-      sessionStorage.setItem('userRole', role);
-      
-      // Determine redirect based on role
-      const redirectPath = role === 'admin' ? '/admin' :
-                         role === 'regional' ? '/regional' : 
-                         '/dashboard';
-      
-      logOperation('AuthProvider.signIn', 'success', { 
-        role,
-        redirect: redirectPath
-      });
-      
-      // Use window.location for hard redirect to ensure clean state
-      window.location.href = redirectPath;
-
-    } catch (error) {
-      logOperation('signIn', 'error', error);
-      const message = error instanceof Error ? error.message : 'Authentication failed';
-      setError(message);
-      throw new Error(message);
-    }
-  };
-
-  const resetPassword = async (email: string) => {
+  const handleResetPassword = async (email: string) => {
     setError(null);
     try {
       const auth = getAuth();
@@ -256,7 +317,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const signOut = async () => {
+  const handleSignOut = async () => {
     setError(null);
     try {
       clearSessionState();
@@ -273,17 +334,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const value = {
-    currentUser,
-    userProfile,
-    signIn,
-    resetPassword,
-    signOut,
-    loading,
-    error,
-    isInitialized
-  };
-
   if (loading || !isInitialized) {
     return <LoadingScreen 
       error={error}
@@ -293,6 +343,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isOffline={!getNetworkStatus().isOnline}
     />;
   }
+
+  const value = {
+    currentUser,
+    userProfile,
+    signIn,
+    resetPassword: handleResetPassword,
+    signOut: handleSignOut,
+    loading,
+    error,
+    isInitialized
+  };
 
   return (
     <AuthContext.Provider value={value}>

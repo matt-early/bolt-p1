@@ -1,5 +1,6 @@
-import { logOperation } from '../firebase/logging';
-import { waitForNetwork } from '../firebase/network';
+import { logOperation } from '../../firebase/logging';
+import { waitForNetwork } from '../../firebase/network';
+import { AUTH_ERROR_MESSAGES } from './constants';
 
 interface RetryOptions {
   maxAttempts?: number;
@@ -28,7 +29,7 @@ export const retryAuthOperation = async <T>(
         logOperation(options.operation, 'waiting-for-network');
         const hasNetwork = await waitForNetwork(timeout / 2);
         if (!hasNetwork) {
-          throw new Error('No network connection available');
+          throw new Error(AUTH_ERROR_MESSAGES.NETWORK_ERROR);
         }
       }
 

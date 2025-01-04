@@ -2,23 +2,29 @@ import { User } from 'firebase/auth';
 import { logOperation } from '../../firebase/logging';
 import { getNetworkStatus } from '../../firebase/network';
 import { clearSessionState, setSessionState, getSessionState } from './state';
-import { retry } from '../../firebase/retry';
 import { retryAuthOperation } from '../retry';
+import { 
+  SESSION_TIMEOUT, 
+  GRACE_PERIOD, 
+  TOKEN_REFRESH_ATTEMPTS,
+  TOKEN_REFRESH_DELAY,
+  AUTH_ERROR_MESSAGES
+} from './constants';
 
-const SESSION_TIMEOUT = 55 * 60 * 1000; // 55 minutes
-const GRACE_PERIOD = 5 * 60 * 1000; // 5 minute grace period
-const TOKEN_REFRESH_ATTEMPTS = 3;
-const TOKEN_REFRESH_DELAY = 1000;
 
 export const validateTokenResult = async (user: User): Promise<boolean> => {
   try {
     // Try to get a fresh token
-    const tokenResult = await retry(
-      () => user.getIdTokenResult(true),
-      {
-        maxAttempts: TOKEN_REFRESH_ATTEMPTS,
-        initialDelay: TOKEN_REFRESH_DELAY,
-        operation: 'validateTokenResult'
+    const tokenResult = await retryAuthOperation(
+      async () => {
+        // Force token refresh
+        await user.getIdToken(true);
+        return user.getIdTokenResult();
+      }, {
+        maxAttempts: 3,
+        baseDelay: 1000,
+        operation: 'validateTokenResult',
+        timeout: 10000
       }
     );
     
@@ -91,16 +97,26 @@ export const validateSession = async (user: User | null): Promise<boolean> => {
     // If online but have cached session, validate token
     if (cachedSession && cachedRole) {
       try {
-        const isValid = await validateTokenResult(user);
-        if (!isValid) {
-          clearSessionState();
-          return false;
+        // Try to refresh token
+        await user.getIdToken(true);
+        
+        // Get fresh token result
+        const tokenResult = await user.getIdTokenResult();
+        const now = Date.now();
+        const issuedAt = tokenResult.issuedAtTime ? new Date(tokenResult.issuedAtTime) : null;
+        
+        if (!issuedAt || (now - issuedAt.getTime() > SESSION_TIMEOUT)) {
+          throw new Error('Token expired');
         }
+        
         return true;
       } catch (error) {
-        // Token validation failed, but we have a cached session
-        logOperation('validateSession', 'warning', 'Token validation failed, using cached session');
-        return true;
+        // Only use cached session if offline
+        if (!isOnline) {
+          logOperation('validateSession', 'warning', 'Offline - using cached session');
+          return true;
+        }
+        throw error;
       }
     }
 

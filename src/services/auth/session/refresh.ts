@@ -2,50 +2,56 @@ import { User } from 'firebase/auth';
 import { logOperation } from '../../firebase/logging';
 import { getNetworkStatus } from '../../firebase/network';
 import { handleTokenError, validateTokenAge } from './handlers';
-import { setSessionState } from './state';
+import { setSessionState, clearSessionState } from './state';
+import { AUTH_ERROR_MESSAGES, SESSION_TIMEOUT, REFRESH_THRESHOLD } from './constants';
+import { retryAuthOperation } from '../retry';
 
-const SESSION_TIMEOUT = 55 * 60 * 1000; // 55 minutes
-const REFRESH_THRESHOLD = 5 * 60 * 1000; // 5 minutes
 const REFRESH_RETRY_DELAY = 1000; // 1 second
 
 export const refreshSession = async (user: User): Promise<void> => {
   try {
     const { isOnline } = getNetworkStatus();
+    const cachedSession = sessionStorage.getItem('isAuthenticated');
     
     if (!isOnline) {
-      logOperation('refreshSession', 'warning', 'Offline - skipping refresh');
-      return;
+      if (cachedSession) {
+        logOperation('refreshSession', 'warning', 'Offline - using cached session');
+        return;
+      }
+      logOperation('refreshSession', 'error', {
+        message: 'Network offline',
+        userId: user.uid
+      });
+      throw new Error(AUTH_ERROR_MESSAGES['auth/network-request-failed']);
     }
 
-    // Get current token result
-    const currentToken = await user.getIdTokenResult();
-    const tokenAge = currentToken.issuedAtTime ? 
-      Date.now() - new Date(currentToken.issuedAtTime).getTime() : 
-      Infinity;
+    // First try to refresh the token
+    await retryAuthOperation(
+      () => user.getIdToken(true), 
+      {
+        operation: 'refreshToken',
+        maxAttempts: 3,
+        baseDelay: 1000,
+        timeout: 10000
+      }
+    );
 
-    // Only refresh if token is old enough
-    if (tokenAge > REFRESH_THRESHOLD) {
-      await user.getIdToken(true);
-    }
+    // Get token result after refresh
+    const result = await user.getIdTokenResult();
     
-    // Update session state after successful refresh
+    // Update session state
     const now = Date.now();
-    setSessionState({
-      authenticated: true,
-      user,
-      lastRefresh: now
-    });
-    
-    // Update session storage
     sessionStorage.setItem('lastTokenRefresh', now.toString());
     sessionStorage.setItem('tokenExpiration', (now + SESSION_TIMEOUT).toString());
-    sessionStorage.setItem('lastTokenRefresh', now.toString());
 
     logOperation('refreshSession', 'success');
   } catch (error) {
     logOperation('refreshSession', 'error', error);
-    await handleTokenError(user, error);
-    throw error;
+    
+    // Only throw if online and no cached session
+    if (isOnline || !cachedSession) {
+      throw error;
+    }
   }
 };
 

@@ -29,9 +29,35 @@ export interface AuthError {
 
 export const handleAuthError = (error: unknown): AuthError => {
   if (error instanceof FirebaseError) {
+    // Handle specific Firebase error codes
+    if (error.code === 'auth/network-request-failed') {
+      return {
+        code: error.code,
+        message: AUTH_ERROR_MESSAGES['auth/network-request-failed'],
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    if (error.code === 'auth/too-many-requests') {
+      return {
+        code: error.code,
+        message: AUTH_ERROR_MESSAGES['auth/too-many-requests'],
+        timestamp: new Date().toISOString()
+      };
+    }
+
     return getAuthErrorMessage(error.code, error.message);
   }
   
+  // Handle network errors
+  if (!navigator.onLine) {
+    return {
+      code: 'network-error',
+      message: AUTH_ERROR_MESSAGES['auth/network-request-failed'],
+      timestamp: new Date().toISOString()
+    };
+  }
+
   return {
     code: 'unknown',
     message: error instanceof Error ? error.message : 'An unexpected error occurred',

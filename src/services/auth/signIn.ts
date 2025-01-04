@@ -5,7 +5,7 @@ import { AUTH_SETTINGS } from '../../config/auth-settings';
 import { logOperation } from '../firebase/logging';
 import { retryAuthOperation } from './retry';
 import { handleAuthNetworkError } from './network';
-import { AUTH_ERROR_MESSAGES } from './errors';
+import { AUTH_ERROR_MESSAGES, handleAuthError } from './errors';
 import { UserProfile, ROLE_MAPPING } from '../../types/auth';
 import { loadUserProfile } from './init';
 import { FirebaseError } from 'firebase/app';
@@ -34,9 +34,15 @@ const attemptFirestoreOperation = async <T>(
     throw error;
   }
 };
-export const signIn = async (email: string, password: string) => {
+export const authenticateUser = async (email: string, password: string) => {
   try {
     logOperation('signIn', 'start');
+
+    // Wait for auth to be ready
+    const auth = getAuth();
+    if (!auth) {
+      throw new Error('Authentication service not initialized');
+    }
     
     // Wait for Firebase initialization
     const auth = getAuth();

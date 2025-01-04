@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../hooks/useAuth';
 import { DateRangeSelector } from '../Dashboard/DateRangeSelector';
 import { PerformanceMetrics } from '../Dashboard/PerformanceMetrics';
 import { SupplierPerformance } from '../Dashboard/SupplierPerformance';
