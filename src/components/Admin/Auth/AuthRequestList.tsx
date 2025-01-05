@@ -8,7 +8,7 @@ import {
   rejectAuthRequest 
 } from '../../../services/auth';
 import { fetchStores } from '../../../services/stores';
-import { useAuth } from '../../../providers/AuthProvider';
+import { useAuth } from '../../../hooks/useAuth';
 import { RequestList } from './components/RequestList';
 import { ErrorDisplay } from './components/ErrorDisplay';
 import { EmptyState } from './components/EmptyState';

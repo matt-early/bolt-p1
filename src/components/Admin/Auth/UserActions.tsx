@@ -1,7 +1,7 @@
 import React from 'react';
 import { MoreVertical, Key, UserX, UserCheck, Trash2 } from 'lucide-react';
 import { UserProfile, UserRole } from '../../../types/auth';
-import { useAuth } from '../../../contexts/AuthContext';
+import { useAuth } from '../../../hooks/useAuth';
 import { resetUserPassword, disableUser, enableUser, deleteUser } from '../../../services/admin/userActions';
 
 interface UserActionsProps {

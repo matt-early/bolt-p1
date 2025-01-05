@@ -2,45 +2,24 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   User,
-  onAuthStateChanged,
+  onAuthStateChanged, 
   sendPasswordResetEmail, 
   signOut as firebaseSignOut
 } from 'firebase/auth';
-import { createContext, useContext } from 'react';
+import { AuthContext, type AuthContextType } from '../contexts/AuthContext';
 import { getAuth } from '../services/firebase/db';
 import { initializeFirebaseServices } from '../services/firebase/init';
+import { getNetworkStatus, initNetworkMonitoring, waitForNetwork } from '../services/firebase/network';
+import { handleAuthError } from '../services/auth/errors';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { logOperation } from '../services/firebase/logging';
-import { initNetworkMonitoring, getNetworkStatus } from '../services/firebase/network';
 import { UserProfile } from '../types/auth';
 import { 
   authenticateUser, 
   loadUserProfile, 
   initializeAuthSession, 
-  clearSessionState,
-  handleAuthError 
+  clearSessionState
 } from '../services/auth';
-
-interface AuthContextType {
-  currentUser: User | null;
-  userProfile: UserProfile | null;
-  signIn: (email: string, password: string) => Promise<void>;
-  resetPassword: (email: string) => Promise<void>;
-  signOut: () => Promise<void>;
-  loading: boolean;
-  error: string | null;
-  isInitialized: boolean;
-}
-
-const AuthContext = createContext<AuthContextType | null>(null);
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
@@ -52,43 +31,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const [initAttempts, setInitAttempts] = useState<number>(0);
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
+  const [networkStatus, setNetworkStatus] = useState(getNetworkStatus());
   const MAX_INIT_ATTEMPTS = 3;
-
-  // Initialize Firebase and auth state
+  const INIT_TIMEOUT = 30000; // 30 seconds
+  const INIT_RETRY_DELAY = 2000;
+  
   useEffect(() => {
     let mounted = true;
     let unsubscribe: (() => void) | undefined;
 
     const initialize = async () => {
-      if (isInitialized) return;
-      
+      if (isInitialized || isInitializing) return;
+
+      // Wait for network if offline
+      if (!navigator.onLine) {
+        const hasNetwork = await waitForNetwork(INIT_TIMEOUT);
+        if (!hasNetwork && mounted) {
+          setError('No network connection available');
+          return;
+        }
+      }
+
       try {
+        setIsInitializing(true);
         setLoading(true);
         setError(null);
+        setNetworkError(null);
         
         await initializeFirebaseServices();
+        
+        // Double check mounted state
         
         if (!mounted) return;
         
         setIsInitialized(true);
         setInitAttempts(0);
-
-        // Set up auth state listener after initialization
+        
         const auth = getAuth();
         unsubscribe = onAuthStateChanged(auth, handleAuthStateChange);
       } catch (error) {
+        // Only update state if still mounted
         if (!mounted) return;
+        setIsInitializing(false);
         
         setInitAttempts(prev => prev + 1);
         setError('Failed to initialize authentication. Please try again.');
         logOperation('AuthProvider.init', 'error', error);
-        
+
+        // Schedule retry if under max attempts
         if (initAttempts < MAX_INIT_ATTEMPTS - 1) {
-          setTimeout(initialize, 2000 * (initAttempts + 1));
+          setTimeout(initialize, INIT_RETRY_DELAY * (initAttempts + 1));
         }
       } finally {
         if (mounted) {
-          setIsInitializing(false);
           setLoading(false);
         }
       }
@@ -99,148 +94,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       mounted = false;
       if (unsubscribe) unsubscribe();
+      if (networkCleanup) networkCleanup();
     };
-  }, [initAttempts, isInitialized, isInitializing]);
-
-  // Handle auth state changes
-  const handleAuthStateChange = async (user: User | null) => {
-    try {
-      if (user) {
-        setLoading(true);
-        
-        // Initialize auth session
-        const isValid = await initializeAuthSession(user);
-        if (!isValid) {
-          clearAuthState();
-          return;
-        }
-
-        // Load user profile
-        const profile = await loadUserProfile(user.uid);
-        if (profile) {
-          setUserProfile(profile);
-          sessionStorage.setItem('isAuthenticated', 'true');
-          setCurrentUser(user);
-        } else {
-          logOperation('authStateChange', 'warning', 'No user profile found');
-          clearAuthState();
-        }
-      } else {
-        clearAuthState();
-      }
-    } catch (err) {
-      logOperation('authStateChange', 'error', err);
-      clearAuthState();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const clearAuthState = () => {
-    clearSessionState();
-    setUserProfile(null);
-    setCurrentUser(null);
-  };
-  // Initialize Firebase on mount
-  const signIn = async (email: string, password: string) => {
-    setError(null);
-    setLoading(true);
-    
-    try {
-      logOperation('AuthProvider.signIn', 'start', { email });
-      
-      if (!isInitialized) {
-        throw new Error('Authentication service not initialized');
-      }
-
-      const { user, profile, role } = await authenticateUser(email, password);
-      
-      // Set auth state
-      setCurrentUser(user);
-      setUserProfile(profile);
-      sessionStorage.setItem('isAuthenticated', 'true');
-      sessionStorage.setItem('userRole', role);
-      
-      // Determine redirect based on role
-      const redirectPath = role === 'admin' ? '/admin' :
-                         role === 'regional' ? '/regional' : 
-                         '/dashboard';
-       
-      logOperation('AuthProvider.signIn', 'success', { 
-        role,
-        redirect: redirectPath
-      });
-      
-      // Use navigate instead of window.location
-      navigate(redirectPath, { replace: true });
-    } catch (error) {
-      logOperation('signIn', 'error', error);
-      const { message } = handleAuthError(error);
-      setError(message);
-      throw new Error(message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    let mounted = true;
-    const init = async () => {
-      if (isInitialized || isInitializing) return;
-      
-      try {
-        setIsInitializing(true);
-        setLoading(true);
-        setError(null);
-        setNetworkError(null);
-        
-        if (initAttempts >= MAX_INIT_ATTEMPTS) {
-          throw new Error('Failed to initialize after multiple attempts');
-        }
-
-        await initializeFirebaseServices();
-        if (mounted) {
-          setIsInitialized(true);
-          setInitAttempts(0);
-        }
-      } catch (error) {
-        if (mounted) {
-          setInitAttempts(prev => prev + 1);
-          setError('Failed to initialize Firebase. Please try again.');
-          logOperation('AuthProvider.init', 'error', error);
-          
-          // Retry after delay if not max attempts
-          if (initAttempts < MAX_INIT_ATTEMPTS - 1) {
-            setTimeout(init, 2000 * (initAttempts + 1));
-          }
-        }
-      } finally {
-        if (mounted) {
-          setIsInitializing(false);
-          setLoading(false);
-        }
-      }
-    };
-
-    init();
-    return () => {
-      mounted = false;
-    };
-  }, [initAttempts, isInitialized, isInitializing]);
+  }, [initAttempts, isInitialized]);
 
   // Monitor network status
   useEffect(() => {
-    const cleanup = initNetworkMonitoring(
-      // On online
-      () => {
+    const cleanup = initNetworkMonitoring({
+      onOnline() {
         setError(null);
         setNetworkError(null);
+        setNetworkStatus(getNetworkStatus());
       },
-      // On offline
-      () => {
+      onOffline() {
         setNetworkError('No internet connection. Please check your network and try again.');
+        setNetworkStatus(getNetworkStatus());
       }
-    );
+    });
 
     return cleanup;
   }, []);
@@ -249,13 +119,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let mounted = true;
     let unsubscribe: (() => void) | undefined;
-    
-    if (!isInitialized) {
-      return;
-    }
-    
-    const auth = getAuth();
-    
+
     const clearAuthState = () => {
       clearSessionState();
       if (mounted) {
@@ -263,47 +127,84 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setCurrentUser(null);
       }
     };
+    
+    // Only handle auth state changes after both Firebase and Auth are initialized
+    if (!isInitialized) {
+      return;
+    }
+    
+    const auth = getAuth();
 
     unsubscribe = onAuthStateChanged(auth, async (user) => {
+      logOperation('AuthProvider.onAuthStateChanged', user ? 'user-present' : 'no-user');
+      
       try {
-        if (user) {
-          setLoading(true);
-          
-          // Initialize auth session
-          const isValid = await initializeAuthSession(user);
-          if (!isValid && mounted) {
-            clearAuthState();
-            return;
-          }
-
-          // Load user profile
-          const profile = await loadUserProfile(user.uid);
-          if (profile && mounted) {
-            setUserProfile(profile);
-            sessionStorage.setItem('isAuthenticated', 'true');
-            setCurrentUser(user);
-          } else {
-            logOperation('authStateChange', 'warning', 'No user profile found');
-            clearAuthState();
-          }
-        } else {
+        if (!user) {
           clearAuthState();
+          return;
         }
-      } catch (err) {
-        logOperation('authStateChange', 'error', err);
-        clearAuthState();
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    });
 
+        // Load user profile
+        const profile = await loadUserProfile(user.uid);
+        if (!profile) {
+          clearAuthState();
+          return;
+        }
+
+        // Set auth state
+        setCurrentUser(user);
     return () => {
       mounted = false;
       if (unsubscribe) unsubscribe();
     };
   }, [isInitialized]);
+
+  const signIn = async (email: string, password: string) => {
+    setError(null);
+    setLoading(true);
+
+    // Validate initialization
+    if (!isInitialized) {
+      setError('Authentication service not initialized');
+      setLoading(false);
+      return;
+    }
+    
+    try {
+      if (!isInitialized) {
+        throw new Error('Authentication service not initialized');
+      }
+      
+      const { user, profile, role } = await authenticateUser(email, password);
+
+      // Set auth state
+      // Update auth state
+      setCurrentUser(user);
+      setUserProfile(profile);
+      sessionStorage.setItem('isAuthenticated', 'true');
+      sessionStorage.setItem('userRole', role);
+      
+      // Navigate after state is updated
+      logOperation('AuthProvider.signIn', 'success', { 
+        role,
+        userId: user.uid
+      });
+
+      // Determine and navigate to correct path
+      const redirectPath = role === 'admin' ? '/admin' :
+                         role === 'regional' ? '/regional' : 
+                         '/dashboard';
+      navigate(redirectPath, { replace: true });
+      
+    } catch (error) {
+      const authError = handleAuthError(error);
+      logOperation('AuthProvider.signIn', 'error', error);
+      logOperation('AuthProvider.signIn', 'error', authError);
+      setError(authError.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleResetPassword = async (email: string) => {
     setError(null);
@@ -352,7 +253,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     signOut: handleSignOut,
     loading,
     error,
-    isInitialized
+    isInitialized,
+    networkStatus
   };
 
   return (

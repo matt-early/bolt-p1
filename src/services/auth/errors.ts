@@ -1,80 +1,57 @@
 import { logOperation } from '../firebase/logging';
 import { FirebaseError } from 'firebase/app';
 
+export type AuthErrorCode = keyof typeof AUTH_ERROR_MESSAGES;
+
 export const AUTH_ERROR_MESSAGES = {
-  'auth/user-not-found': 'No account exists with this email address. Please check your email or register for a new account.',
-  'auth/wrong-password': 'Incorrect password. Please try again or use the "Forgot Password" link below.',
-  'auth/invalid-login-credentials': 'Invalid login credentials. Please check your email and password.',
+  'auth/invalid-credential': 'Invalid email or password',
+  'auth/invalid-login-credentials': 'Invalid email or password',
+  'auth/user-not-found': 'No account exists with this email address',
+  'auth/wrong-password': 'Incorrect password',
+  'auth/user-disabled': 'This account has been disabled',
+  'auth/too-many-requests': 'Too many failed attempts. Please try again later',
+  'auth/network-request-failed': 'Network error. Please check your connection',
+  'auth/requires-recent-login': 'Please sign in again to continue',
+  'auth/invalid-email': 'Invalid email format',
   'auth/missing-credentials': 'Email and password are required',
   'auth/email-already-in-use': 'An account already exists with this email address',
-  'auth/invalid-credential': 'Invalid login credentials. Please check your email and password.',
-  'auth/invalid-email': 'Invalid email address format',
   'auth/weak-password': 'Password should be at least 6 characters',
-  'auth/network-request-failed': 'Network error. Please check your connection and try again.',
-  'auth/too-many-requests': 'Too many failed login attempts. For security reasons, please wait a few minutes before trying again.',
-  'auth/user-disabled': 'This account has been disabled. Please contact your administrator.',
-  'auth/operation-not-allowed': 'Sign-in is currently disabled',
-  'auth/popup-closed-by-user': 'Sign-in window was closed',
-  'auth/cancelled-popup-request': 'Sign-in operation cancelled',
-  'auth/popup-blocked': 'Sign-in popup was blocked by the browser',
-  'default': 'An error occurred during sign in. Please try again.'
+  'default': 'An error occurred during authentication'
 } as const;
 
-export interface AuthError {
+interface AuthError {
   code: string;
   message: string;
-  originalError?: string;
-  timestamp?: string;
+  originalError?: unknown;
 }
 
 export const handleAuthError = (error: unknown): AuthError => {
   if (error instanceof FirebaseError) {
-    // Handle specific Firebase error codes
-    if (error.code === 'auth/network-request-failed') {
-      return {
-        code: error.code,
-        message: AUTH_ERROR_MESSAGES['auth/network-request-failed'],
-        timestamp: new Date().toISOString()
-      };
-    }
-
-    if (error.code === 'auth/too-many-requests') {
-      return {
-        code: error.code,
-        message: AUTH_ERROR_MESSAGES['auth/too-many-requests'],
-        timestamp: new Date().toISOString()
-      };
-    }
-
-    return getAuthErrorMessage(error.code, error.message);
+    const message = AUTH_ERROR_MESSAGES[error.code as AuthErrorCode] || 
+                   AUTH_ERROR_MESSAGES.default;
+    
+    logOperation('handleAuthError', 'firebase-error', { code: error.code, message });
+    return { 
+      code: error.code, 
+      message,
+      originalError: error
+    };
   }
-  
-  // Handle network errors
+
   if (!navigator.onLine) {
     return {
       code: 'network-error',
       message: AUTH_ERROR_MESSAGES['auth/network-request-failed'],
-      timestamp: new Date().toISOString()
+      originalError: error
     };
   }
 
+  const message = error instanceof Error ? error.message : AUTH_ERROR_MESSAGES.default;
+  logOperation('handleAuthError', 'unknown-error', { message });
+  
   return {
     code: 'unknown',
-    message: error instanceof Error ? error.message : 'An unexpected error occurred',
-    timestamp: new Date().toISOString()
-  };
-};
-
-export const getAuthErrorMessage = (code: string, originalError?: string): AuthError => {
-  const message = AUTH_ERROR_MESSAGES[code as keyof typeof AUTH_ERROR_MESSAGES] || AUTH_ERROR_MESSAGES.default;
-  
-  const error: AuthError = {
-    code,
     message,
-    originalError,
-    timestamp: new Date().toISOString()
+    originalError: error
   };
-
-  logOperation('getAuthErrorMessage', 'info', error);
-  return error;
 };

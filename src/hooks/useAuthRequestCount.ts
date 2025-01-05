@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { onSnapshot, query, collection, where } from 'firebase/firestore';
 import { getDb } from '../services/firebase/db';
 import { logOperation } from '../services/firebase/logging';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from './useAuth';
 
 export const useAuthRequestCount = () => {
   const [count, setCount] = useState(0);

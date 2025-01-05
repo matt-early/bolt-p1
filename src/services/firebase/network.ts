@@ -1,5 +1,10 @@
 import { logOperation } from './logging';
 
+interface NetworkMonitoringCallbacks {
+  onOnline: () => void;
+  onOffline: () => void;
+}
+
 export interface NetworkStatus {
   isOnline: boolean;
   lastOnline: Date | null;
@@ -20,10 +25,7 @@ const MIN_RETRY_INTERVAL = 5000; // Minimum 5 seconds between retries
 
 export const getNetworkStatus = (): NetworkStatus => ({ ...networkStatus });
 
-export const initNetworkMonitoring = (
-  onOnline?: () => void,
-  onOffline?: () => void
-) => {
+export const initNetworkMonitoring = (callbacks: NetworkMonitoringCallbacks): (() => void) => {
   const handleOnline = () => {
     networkStatus = {
       ...networkStatus,
@@ -32,7 +34,7 @@ export const initNetworkMonitoring = (
       connectionAttempts: 0
     };
     logOperation('network', 'online');
-    onOnline?.();
+    callbacks.onOnline();
   };
 
   const handleOffline = () => {
@@ -43,15 +45,21 @@ export const initNetworkMonitoring = (
       lastAttempt: new Date()
     };
     logOperation('network', 'offline');
-    onOffline?.();
+    callbacks.onOffline();
   };
 
   window.addEventListener('online', handleOnline);
   window.addEventListener('offline', handleOffline);
 
-  // Set initial status
+  // Set initial status and trigger appropriate callback
   networkStatus.isInitialized = true;
   networkStatus.isOnline = navigator.onLine;
+  
+  if (navigator.onLine) {
+    callbacks.onOnline();
+  } else {
+    callbacks.onOffline();
+  }
 
   return () => {
     window.removeEventListener('online', handleOnline);

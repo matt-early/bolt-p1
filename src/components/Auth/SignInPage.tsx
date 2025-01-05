@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { LogIn, Mail, Lock } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
+import { FirebaseError } from 'firebase/app';
 import { logOperation } from '../../services/firebase/logging';
-import { handleAuthError } from '../../services/auth';
+import { handleAuthError, AUTH_ERROR_MESSAGES } from '../../services/auth/errors';
 
 export const SignInPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -11,7 +12,7 @@ export const SignInPage: React.FC = () => {
   const [error, setError] = useState('');
   const [networkStatus, setNetworkStatus] = useState(navigator.onLine);
   const [loading, setLoading] = useState(false);
-  const { signIn } = useAuth();
+  const { signIn, isInitialized } = useAuth();
   const navigate = useNavigate();
 
   // Monitor network status
@@ -33,33 +34,32 @@ export const SignInPage: React.FC = () => {
     
     if (loading) return;
     
+    if (!networkStatus) {
+      setError('No internet connection. Please check your network and try again.');
+      return;
+    }
+    
     setLoading(true);
     setError('');
     
-    if (!networkStatus) {
-      setError('No internet connection. Please check your network and try again.');
-      setLoading(false);
-      return;
-    }
+    const trimmedEmail = email.trim();
+    const trimmedPassword = password.trim();
 
-    if (!email.trim() || !password.trim()) {
-      setError('Email and password are required');
+    if (!trimmedEmail || !trimmedPassword) {
+      setError(AUTH_ERROR_MESSAGES['auth/missing-credentials']);
       setLoading(false);
       return;
     }
     
     try {
-      logOperation('SignInPage.handleSubmit', 'start');
-      
-      // Add small delay to prevent rapid re-submission
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      await signIn(email, password);
+      logOperation('SignInPage.handleSubmit', 'signing-in');
+      await signIn(trimmedEmail, trimmedPassword);
       logOperation('SignInPage.handleSubmit', 'success');
+      // Let AuthProvider handle navigation
     } catch (error) {
-      const { message } = handleAuthError(error);
-      setError(message);
-      logOperation('SignInPage.handleSubmit', 'error', error);
+      const authError = handleAuthError(error);
+      setError(authError.message);
+      logOperation('SignInPage.handleSubmit', 'error', authError);
     } finally {
       setLoading(false);
     }

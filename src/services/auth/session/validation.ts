@@ -1,34 +1,25 @@
 import { User } from 'firebase/auth';
+import { getAuth } from '../../firebase/db';
 import { logOperation } from '../../firebase/logging';
-import { getNetworkStatus } from '../../firebase/network';
-import { clearSessionState, setSessionState, getSessionState } from './state';
-import { retryAuthOperation } from '../retry';
+import { getNetworkStatus, waitForNetwork } from '../../firebase/network';
+import { clearSessionState } from './state';
 import { 
   SESSION_TIMEOUT, 
   GRACE_PERIOD, 
-  TOKEN_REFRESH_ATTEMPTS,
-  TOKEN_REFRESH_DELAY,
+  NETWORK_TIMEOUT,
   AUTH_ERROR_MESSAGES
 } from './constants';
 
-
 export const validateTokenResult = async (user: User): Promise<boolean> => {
   try {
-    // Try to get a fresh token
-    const tokenResult = await retryAuthOperation(
-      async () => {
-        // Force token refresh
-        await user.getIdToken(true);
-        return user.getIdTokenResult();
-      }, {
-        maxAttempts: 3,
-        baseDelay: 1000,
-        operation: 'validateTokenResult',
-        timeout: 10000
-      }
-    );
-    
-    // Check if token needs refresh
+    // Get token without forcing refresh first
+    const token = await user.getIdToken(false);
+    if (!token) {
+      return false;
+    }
+
+    // Get token result
+    const tokenResult = await user.getIdTokenResult();
     const now = Date.now();
     const issuedAt = tokenResult.issuedAtTime ? new Date(tokenResult.issuedAtTime) : null;
     
@@ -63,83 +54,44 @@ export const validateSession = async (user: User | null): Promise<boolean> => {
 
     const { isOnline } = getNetworkStatus();
     const cachedSession = sessionStorage.getItem('isAuthenticated');
-    const cachedRole = sessionStorage.getItem('userRole');
     const lastRefresh = sessionStorage.getItem('lastTokenRefresh');
     
-    // If offline, wait for network with timeout
-    if (!isOnline) {
-      logOperation('validateSession', 'waiting-for-network');
-      const hasNetwork = await waitForNetwork(NETWORK_TIMEOUT);
-      if (!hasNetwork) {
-        // Check if we have a valid cached session
-        if (cachedSession && cachedRole && lastRefresh) {
-          const refreshTime = parseInt(lastRefresh, 10);
-          const age = Date.now() - refreshTime;
-          
-          // Allow cached session if within timeout
-          if (age < SESSION_TIMEOUT) {
-            logOperation('validateSession', 'offline', 'Using cached session');
-            return true;
-          }
-        }
+    // If offline, use cached session
+    if (!isOnline && cachedSession && lastRefresh) {
+      const age = Date.now() - parseInt(lastRefresh, 10);
+      if (age > SESSION_TIMEOUT) {
+        clearSessionState();
         return false;
       }
+      return true;
     }
 
-    // Force token refresh if needed
+    // Online validation
     try {
-      await user.getIdToken(true);
-    } catch (error) {
-      logOperation('validateSession', 'error', 'Token refresh failed');
-      clearSessionState();
-      return false;
-    }
-    // If online but have cached session, validate token
-    if (cachedSession && cachedRole) {
-      try {
-        // Try to refresh token
-        await user.getIdToken(true);
-        
-        // Get fresh token result
-        const tokenResult = await user.getIdTokenResult();
-        const now = Date.now();
-        const issuedAt = tokenResult.issuedAtTime ? new Date(tokenResult.issuedAtTime) : null;
-        
-        if (!issuedAt || (now - issuedAt.getTime() > SESSION_TIMEOUT)) {
-          throw new Error('Token expired');
+      const isValid = await validateTokenResult(user);
+      if (!isValid) {
+        // Only clear session if online
+        if (isOnline) {
+          clearSessionState();
+          return false;
         }
-        
-        return true;
-      } catch (error) {
-        // Only use cached session if offline
-        if (!isOnline) {
-          logOperation('validateSession', 'warning', 'Offline - using cached session');
-          return true;
-        }
-        throw error;
+        return !!cachedSession;
       }
+
+      logOperation('validateSession', 'success', { userId: user.uid });
+      return true;
+    } catch (error: any) {
+      logOperation('validateSession', 'error', error);
+      // Only clear session if online
+      if (isOnline) {
+        clearSessionState();
+        return false;
+      }
+      return !!cachedSession;
     }
-
-    const isValid = await validateTokenResult(user);
-    if (!isValid) {
-      clearSessionState();
-      return false;
-    }
-
-    setSessionState({
-      initialized: true,
-      authenticated: true,
-      user,
-      lastRefresh: Date.now()
-    });
-
-    logOperation('validateSession', 'success', { userId: user.uid });
-    return true;
-
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Session validation failed';
     logOperation('validateSession', 'error', { userId: user?.uid, error: errorMessage });
-    clearSessionState();
-    return false;
+    return !!cachedSession;
   }
 };

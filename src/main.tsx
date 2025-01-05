@@ -6,14 +6,17 @@ import { AuthErrorBoundary } from './components/Auth/AuthErrorBoundary';
 import App from './App';
 import './index.css';
 
-const root = createRoot(document.getElementById('root')!);
+const root = document.getElementById('root');
+if (!root) throw new Error('Root element not found');
 
-root.render(
+createRoot(root).render(
   <React.StrictMode>
     <BrowserRouter>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
+      <AuthErrorBoundary>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </AuthErrorBoundary>
     </BrowserRouter>
   </React.StrictMode>
 );

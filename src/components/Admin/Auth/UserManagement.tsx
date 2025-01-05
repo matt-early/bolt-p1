@@ -5,7 +5,7 @@ import { Region } from '../../../types';
 import { fetchUsers, updateUserRole } from '../../../services/admin/userManagement';
 import { migrateSalespeopleToUsers } from '../../../services/admin/migration'; 
 import { fetchRegions } from '../../../services/regions';
-import { useAuth } from '../../../contexts/AuthContext';
+import { useAuth } from '../../../hooks/useAuth';
 import { UserRow } from './UserRow';
 import { AddUserModal } from './AddUserModal';
 import { UserActions } from './UserActions';

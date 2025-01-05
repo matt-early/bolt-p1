@@ -1,8 +1,10 @@
 import { createContext } from 'react';
 import type { User } from 'firebase/auth';
 import type { UserProfile } from '../types/auth';
+import type { NetworkStatus } from '../services/firebase/network';
 
-interface AuthContextType {
+// Define the context type
+export interface AuthContextType {
   currentUser: User | null;
   userProfile: UserProfile | null;
   signIn: (email: string, password: string) => Promise<void>;
@@ -11,6 +13,8 @@ interface AuthContextType {
   loading: boolean;
   error: string | null;
   isInitialized: boolean;
+  networkStatus: NetworkStatus;
 }
 
-export const AuthContext = createContext<AuthContextType | null>(null);
+// Create and export the context
+export const AuthContext = createContext<AuthContextType | undefined>(undefined);

@@ -1,96 +1,43 @@
-import { signInWithEmailAndPassword, type AuthError as FirebaseAuthError } from 'firebase/auth';
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { getFunctions, httpsCallable, type Functions } from 'firebase/functions';
-import { AUTH_SETTINGS } from '../../config/auth-settings';
-import { logOperation } from '../firebase/logging';
-import { retryAuthOperation } from './retry';
-import { handleAuthNetworkError } from './network';
-import { AUTH_ERROR_MESSAGES, handleAuthError } from './errors';
-import { UserProfile, ROLE_MAPPING } from '../../types/auth';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, updateDoc } from 'firebase/firestore';
+import { getAuth, getDb } from '../firebase/db';
+import { logOperation } from '../firebase/logging'; 
+import { handleAuthError } from './errors';
 import { loadUserProfile } from './init';
-import { FirebaseError } from 'firebase/app';
+import { ROLE_MAPPING } from '../../types/auth';
+import { initializeAuthSession } from './session';
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000;
-
-interface SignInResult {
-  user: any;
-  profile: UserProfile;
-}
-
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const attemptFirestoreOperation = async <T>(
-  operation: () => Promise<T>,
-  retryCount = 0
-): Promise<T> => {
-  try {
-    return await operation();
-  } catch (error: any) {
-    if (error.code === 'unavailable' && retryCount < MAX_RETRIES) {
-      await delay(RETRY_DELAY * Math.pow(2, retryCount));
-      return attemptFirestoreOperation(operation, retryCount + 1);
-    }
-    throw error;
-  }
-};
 export const authenticateUser = async (email: string, password: string) => {
   try {
     logOperation('signIn', 'start');
-
-    // Wait for auth to be ready
-    const auth = getAuth();
-    if (!auth) {
-      throw new Error('Authentication service not initialized');
-    }
     
-    // Wait for Firebase initialization
+    // Validate auth is initialized
     const auth = getAuth();
     if (!auth) {
       throw new Error('Authentication service not initialized');
     }
 
-    if (!email || !password) {
-      throw new Error(AUTH_ERROR_MESSAGES.default);
-    }
 
     const normalizedEmail = email.toLowerCase().trim();
-    
-    let userCredential;
-    try {
-      logOperation('signIn', 'authenticating', { email: normalizedEmail });
-      
-      userCredential = await retryAuthOperation(
-        () => signInWithEmailAndPassword(auth, normalizedEmail, password),
-        {
-          maxAttempts: 3,
-          baseDelay: 1000,
-          operation: 'signIn'
-        }
-      );
+    logOperation('signIn', 'authenticating', { email: normalizedEmail });
 
-      logOperation('signIn', 'authenticated', { uid: userCredential.user.uid });
-    } catch (error) {
-      if (error instanceof FirebaseError) {
-        const message = AUTH_ERROR_MESSAGES[error.code as keyof typeof AUTH_ERROR_MESSAGES] || 
-                       AUTH_ERROR_MESSAGES.default;
-        throw new Error(message);
-      }
-      throw error;
+    const userCredential = await signInWithEmailAndPassword(auth, normalizedEmail, password);
+    logOperation('signIn', 'authenticated', { uid: userCredential.user.uid });
+
+    // Initialize auth session
+    const isValid = await initializeAuthSession(userCredential.user);
+    if (!isValid) {
+      logOperation('signIn', 'error', 'Failed to initialize session');
+      throw new Error('Failed to initialize session');
     }
-    
-    // Force token refresh to ensure claims are up to date
-    logOperation('signIn', 'refreshing-token');
-    await retryAuthOperation(
-      () => userCredential.user.getIdTokenResult(true)
-    );
 
     // Load user profile
     logOperation('signIn', 'loading-profile');
     const profile = await loadUserProfile(userCredential.user.uid);
     if (!profile) {
       logOperation('signIn', 'error', 'Failed to load user profile');
-      throw new Error(AUTH_ERROR_MESSAGES['auth/user-not-found']);
+      logOperation('signIn', 'error', 'Failed to load user profile');
+      throw new Error('Failed to load user profile');
     }
 
     // Update last login time
@@ -102,35 +49,28 @@ export const authenticateUser = async (email: string, password: string) => {
         lastLoginAt: timestamp,
         role: ROLE_MAPPING[profile.role as keyof typeof ROLE_MAPPING] || profile.role
       });
-      
-      // Update profile with new timestamp
+
       profile.lastLoginAt = timestamp;
-      
-      logOperation('signIn', 'success', { lastLoginAt: timestamp });
+      logOperation('signIn', 'updated-last-login');
     } catch (error) {
-      // Non-critical error - log but don't fail sign in
+      // Non-critical error - log but continue
       logOperation('signIn', 'warning', 'Failed to update last login time');
     }
 
-    logOperation('signIn', 'complete', { 
+    logOperation('signIn', 'success', { 
       uid: userCredential.user.uid,
-      role: profile.role
+      role: profile.role 
     });
     
-    // Return auth result with role for navigation
     return {
       user: userCredential.user,
       profile,
-      role: profile.role
+      role: profile.role,
+      timestamp: new Date().toISOString()
     };
-  } catch (error: any) {
-    logOperation('signIn', 'error', error);
-    
-    if (error instanceof FirebaseError && error.code === 'auth/network-request-failed') {
-      throw new Error(handleAuthNetworkError(error));
-    }
-    
-    const message = error instanceof Error ? error.message : 'Unable to sign in at this time';
-    throw new Error(message);
+  } catch (error) {
+    const authError = handleAuthError(error);
+    logOperation('signIn', 'error', authError);
+    throw new Error(authError.message);
   }
 };

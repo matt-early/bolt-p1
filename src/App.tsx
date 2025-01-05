@@ -1,6 +1,6 @@
 import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { useAuth } from './providers/AuthProvider';
+import { useAuth } from './hooks/useAuth';
 import { PrivateRoute } from './components/Auth/PrivateRoute';
 import { SignInPage } from './components/Auth/SignInPage';
 import { ForgotPasswordPage } from './components/Auth/ForgotPasswordPage';
